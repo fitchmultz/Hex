@@ -134,7 +134,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		menu.addItem(.separator())
 
 		let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Hex"
-		let quitTitle = "Quit \(appName)"
+		let quitTitle = String(format: NSLocalizedString("Quit %@", comment: "Quit application menu item"), appName)
 		let quitItem = NSMenuItem(title: quitTitle, action: #selector(quitAction(_:)), keyEquivalent: "q")
 		quitItem.target = self
 		menu.addItem(quitItem)
