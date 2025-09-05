@@ -8,7 +8,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	var settingsWindow: NSWindow?
 	var statusItem: NSStatusItem!
 	private var statusMenu: NSMenu?
-	private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+	private let updatesViewModel = CheckForUpdatesViewModel.shared
 
 	@Dependency(\.soundEffects) var soundEffect
 	@Shared(.hexSettings) var hexSettings: HexSettings
