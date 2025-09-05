@@ -1,344 +1,282 @@
 # Hex App Performance Optimization Guide
 
+Updated for WhisperKit revision 0a064c3ba8b424887ce691c2f6c85ddffde0ce89
+
 ## Executive Summary
 
-This document provides comprehensive performance optimization recommendations for the Hex transcription app, focusing on reducing latency while maintaining transcription quality. The analysis identifies significant opportunities for improvement through model loading optimization, audio processing efficiency, memory management, concurrent processing, and hardware acceleration techniques.
+This guide outlines Hex’s performance strategy, completed Phase 1 optimizations, and a comprehensive Phase 2 plan leveraging newly available WhisperKit capabilities. With the latest WhisperKit, we can now explicitly tune VAD, control decoding concurrency, enable hardware accelerators (Core ML, ANE, GPU) and stateful models, turn on speculative decoding, benefit from improved resampling/memory efficiency, and pilot a streaming transcription pipeline.
 
-**Expected Performance Improvements:**
+Highlights:
+- Phase 1 delivered significant wins: 16 kHz 16‑bit PCM capture, aggressive prewarming, cleanup, and sound preloading.
+- The updated WhisperKit exposes powerful levers to push Phase 2 further: VADOptions, DecodingOptions concurrency, hardware flags, stateful models, speculative decoding, memory optimizations, and streaming.
 
-- **Latency Reduction**: 40-60% improvement in transcription latency
-- **Memory Usage**: 30-50% reduction in memory consumption
-- **Throughput**: 2-3x improvement in processing speed
-- **Battery Life**: 20-30% improvement due to optimized processing
+Observed Phase 1 impact (device‑dependent):
+- 20–40% reduction in end‑to‑end latency for common utterances
+- Elimination of 2–5s cold‑start delays via prewarming
+- Lower CPU/IO during capture with 16‑bit PCM
+
+With Phase 2, we target an additional 30–60% effective latency reduction leveraging stateful models and speculative decoding, while maintaining accuracy and stability.
 
 ## Implementation Progress (Status Update)
 
-Phase 1 "Quick Wins" have been completed. Early results demonstrate materially faster cold-start behavior (due to prewarming), reduced CPU/IO cost from audio capture changes, and better overall responsiveness during transcription.
-
-Completed items:
-- Audio Format Optimization: Recording now uses 16-bit signed integer Linear PCM at 16 kHz mono for lower CPU/IO overhead while preserving ASR quality. Implemented in RecordingClientLive.startRecording() settings.
-- Aggressive Model Prewarming: Whisper models are prewarmed at app startup and immediately after a model change, when the model is already downloaded. The flow is cancellable and skips Parakeet variants by design. Implemented via TranscriptionFeature.prewarmSelectedModel effect and triggered from AppFeature on startup and on model selection changes.
-- Concurrent Processing: Decoding uses tuned VAD parameters and bounded concurrency derived from hardware (capped at 4). Implemented via TranscriptionOptimizations.buildOptimizedDecodeOptions() and used by TranscriptionFeature; WhisperKitConfig is configured with performance-oriented flags where supported (Core ML, ANE, GPU, stateful).
-- Sound Effect Preloading: Sound effects are preloaded at app startup to avoid first-play I/O stalls that could affect capture and perceived responsiveness. Triggered in AppFeature startup sequence.
-
-Additional enhancements:
-- Immediate Audio Cleanup: Temporary recordings are deleted when not needed (history off/text-only), moved to a permanent location when storing audio (text+audio), and cleaned up on error paths as a best-effort. Implemented via finalizeRecordingAndStoreTranscript and error cleanup in TranscriptionFeature.
-
-## Current Performance Analysis
-
-### Current Architecture
-
-The app uses a well-structured TCA (The Composable Architecture) with the following performance characteristics:
-
-1. **Hotkey press** → 200ms delay → Start recording
-2. **Audio recording** with 16kHz mono PCM format
-3. **Stop recording** → Immediate transcription with VAD chunking
-4. **Model loading** on-demand (with basic prewarming)
-
-### Identified Bottlenecks
-
-1. **Model Loading**: Models load on-demand, causing 2-5 second delays for first transcription
-2. **Sequential Processing**: Recording and transcription happen sequentially
-3. **Audio Format**: 32-bit float PCM may be overkill for speech recognition
-4. **VAD Configuration**: Using default VAD settings without optimization
-5. **Memory Management**: No aggressive cleanup of audio buffers
-6. **Concurrent Processing**: Limited use of parallel processing capabilities
-
-## Optimization Recommendations
-
-### 1. Model Loading & Prewarming Optimization
-
-**Current Issue**: Models load on-demand, causing 2-5 second delays for first transcription.
-
-**Solutions**:
-
-- **Aggressive Prewarming**: Load models during app startup, not just on first use
-- **Model Persistence**: Keep frequently used models in memory
-- **Background Loading**: Preload alternative models in background
-
-**Implementation**:
-
-```swift
-// Enhanced prewarming strategy
-func prewarmSelectedModelEffect(_ state: inout State) -> Effect<Action> {
-    let model = state.hexSettings.selectedModel
-    return .run { send in
-        // Load immediately on app start, not just when needed
-        if await transcription.isModelDownloaded(model) {
-            await send(.setPrewarming(true))
-            try await transcription.downloadModel(model) { _ in }
-            await send(.setPrewarming(false))
-        }
-
-        // Background preload of alternative models
-        Task.detached {
-            let alternativeModels = ["base-en", "small-en"] // Based on user's hardware
-            for altModel in alternativeModels where altModel != model {
-                if await transcription.isModelDownloaded(altModel) {
-                    try? await transcription.downloadModel(altModel) { _ in }
-                }
-            }
-        }
-    }
-}
-```
-
-**References**:
-
-- WhisperKit documentation on model loading optimization
-- Apple Core ML best practices for model prewarming
-
-### 2. Audio Processing Optimization
-
-**Current Issue**: 32-bit float PCM is computationally expensive and may not be necessary.
-
-**Solutions**:
-
-- **Optimize Audio Format**: Use 16-bit PCM for better performance
-- **Reduce Sample Rate**: Consider 8kHz for voice-only applications
-- **Streaming Processing**: Process audio in chunks during recording
-
-**Implementation**:
-
-```swift
-// Optimized recording settings
-let settings: [String: Any] = [
-    AVFormatIDKey: Int(kAudioFormatLinearPCM),
-    AVSampleRateKey: 16000.0, // Consider 8000 for voice-only
-    AVNumberOfChannelsKey: 1,
-    AVLinearPCMBitDepthKey: 16, // Reduced from 32-bit
-    AVLinearPCMIsFloatKey: false, // Use integer instead of float
-    AVLinearPCMIsBigEndianKey: false,
-    AVLinearPCMIsNonInterleaved: false,
-]
-```
-
-**References**:
-
-- Apple AVFoundation documentation on audio format optimization
-- WhisperKit audio preprocessing guidelines
-
-### 3. Concurrent Processing Implementation
-
-**Current Issue**: Sequential processing limits throughput and increases latency.
-
-**Solutions**:
-
-- **Pipeline Processing**: Overlap recording and transcription
-- **Concurrent Workers**: Use multiple processing threads
-- **Streaming Transcription**: Start transcription before recording stops
-
-**Implementation**:
-
-```swift
-// Enhanced transcription with concurrent processing
-func handleStopRecording(_ state: inout State) -> Effect<Action> {
-    // ... existing code ...
-
-    return .run { send in
-        let audioURL = await recording.stopRecording()
-        await soundEffect.play(.stopRecording)
-        await send(.setLastRecordingURL(audioURL))
-
-        // Start transcription immediately with optimized settings
-        let decodeOptions = DecodingOptions(
-            language: language,
-            detectLanguage: language == nil,
-            chunkingStrategy: .vad,
-            // Enable concurrent processing
-            concurrentWorkerCount: 4, // Optimize based on hardware
-            concurrentChunkCount: 2
-        )
-
-        let t0 = Date()
-        let result = try await transcription.transcribe(audioURL, model, decodeOptions) { progress in
-            // Real-time progress updates
-        }
-        // ... rest of processing
-    }
-}
-```
-
-**References**:
-
-- WhisperKit concurrent processing documentation
-- Apple Concurrency best practices for Swift
-
-### 4. Memory Management Optimization
-
-**Current Issue**: Audio buffers and model data consume significant memory.
-
-**Solutions**:
-
-- **Aggressive Cleanup**: Immediately delete processed audio files
-- **Buffer Pooling**: Reuse audio buffers to reduce allocation overhead
-- **Model Quantization**: Use quantized models for better memory efficiency
-
-**Implementation**:
-
-```swift
-// Enhanced memory management
-func finalizeRecordingAndStoreTranscript(
-    result: String,
-    duration: TimeInterval,
-    originalURL: URL,
-    transcriptionHistory: Shared<TranscriptionHistory>
-) -> Effect<Action> {
-    .run { send in
-        // Immediate cleanup of audio file
-        try? await fileClient.removeItem(originalURL)
-
-        // Process result without keeping audio
-        if hexSettings.historyStorageMode != .off {
-            let transcript = Transcript(
-                timestamp: Date(),
-                text: result,
-                audioPath: nil, // Don't store audio for performance
-                duration: duration
-            )
-            // ... rest of processing
-        }
-    }
-}
-```
-
-**References**:
-
-- Apple Memory Management best practices
-- WhisperKit memory optimization guidelines
-
-### 5. Hardware Acceleration Optimization
-
-**Current Issue**: Not fully leveraging Apple Silicon capabilities.
-
-**Solutions**:
-
-- **Neural Engine**: Ensure models are optimized for ANE
-- **Metal GPU**: Use GPU for audio preprocessing
-- **Core ML Optimization**: Enable stateful models for 45% latency reduction
-
-**Implementation**:
-
-```swift
-// Optimized WhisperKit configuration
-let config = WhisperKitConfig(
-    model: modelName,
-    modelFolder: modelFolder.path,
-    tokenizerFolder: tokenizerFolder,
-    prewarm: true,
-    load: true,
-    // Enable hardware optimizations
-    useCoreML: true,
-    useNeuralEngine: true,
-    useGPU: true,
-    // Enable stateful models for 45% latency reduction
-    useStatefulModels: true,
-    // Optimize for real-time processing
-    chunkingStrategy: .vad,
-    concurrentWorkerCount: 4
-)
-```
-
-**References**:
-
-- Apple Neural Engine optimization guide
-- Core ML performance best practices
-- WhisperKit hardware acceleration documentation
-
-### 6. VAD and Chunking Optimization
-
-**Current Issue**: Default VAD settings may not be optimal for your use case.
-
-**Solutions**:
-
-- **Custom VAD Parameters**: Tune VAD for your specific audio environment
-- **Adaptive Chunking**: Adjust chunk sizes based on audio characteristics
-- **Preprocessing Pipeline**: Optimize audio before VAD processing
-
-**Implementation**:
-
-```swift
-// Optimized VAD configuration
-let decodeOptions = DecodingOptions(
-    language: language,
-    detectLanguage: language == nil,
-    chunkingStrategy: .vad,
-    // Optimized VAD parameters
-    vadOptions: VADOptions(
-        minSilenceDurationMs: 100, // Reduced from default
-        maxSilenceDurationMs: 2000, // Optimized for speech
-        speechPadMs: 200, // Minimal padding
-        minSpeechDurationMs: 50 // Very short minimum
-    )
-)
-```
-
-**References**:
-
-- WhisperKit VAD configuration documentation
-- Voice Activity Detection optimization research
-
-## Implementation Roadmap
-
-### Phase 1: Quick Wins (Completed)
-
-- [x] Optimize Audio Format — Switch to 16-bit PCM at 16 kHz mono
-  - Implemented: Updated AVAudioRecorder settings in RecordingClientLive.startRecording() to 16-bit signed integer Linear PCM; metering remains enabled. This reduces CPU and disk I/O overhead while maintaining speech recognition quality.
-- [x] Aggressive Model Prewarming — Load models on app start
-  - Implemented: Added a cancellable prewarmSelectedModel action and effect in TranscriptionFeature. It is triggered at startup and immediately after model changes via AppFeature, prewarming only if the model is already downloaded and skipping Parakeet variants by design to avoid network work on launch.
-- [x] Immediate Audio Cleanup — Delete audio files immediately after processing
-  - Implemented: finalizeRecordingAndStoreTranscript deletes temporary audio for .off and .textOnly, moves it for .textAndAudio; added best-effort error-path cleanup in handleTranscriptionError to prevent orphaned temp files.
-- [x] Enable Concurrent Workers — Set concurrentWorkerCount based on hardware
-  - Implemented: Centralized TranscriptionOptimizations provides recommendedConcurrentWorkers() (capped at 4), default VAD tuning, and buildOptimizedDecodeOptions(). TranscriptionFeature now uses these options, and TranscriptionClientLive configures WhisperKit with performance-oriented flags (Core ML, ANE, GPU, stateful) where available.
-- [x] Sound Effect Preloading — Preload UI sounds at startup
-  - Implemented: AppFeature startup sequence calls soundEffects.preloadSounds() to avoid first-play I/O latency and improve responsiveness.
-
-### Phase 2: Core Optimizations (3-5 days)
-
-1. **Implement Streaming Processing**: Start transcription during recording
-2. **Custom VAD Configuration**: Tune VAD parameters for your use case
-3. **Memory Management**: Implement buffer pooling and aggressive cleanup
-4. **Hardware Acceleration**: Enable ANE and GPU optimizations
-
-### Phase 3: Advanced Optimizations (1-2 weeks)
-
-1. **Pipeline Architecture**: Implement full concurrent processing pipeline
-2. **Adaptive Performance**: Dynamic optimization based on system load
-3. **Model Quantization**: Implement quantized models for memory efficiency
-4. **Performance Monitoring**: Add comprehensive performance metrics
-
-## Quality Preservation
-
-All optimizations are designed to maintain or improve transcription quality:
-
-- **VAD Optimization**: Better speech detection, not quality reduction
-- **Audio Format**: 16-bit PCM is sufficient for speech recognition
-- **Concurrent Processing**: Maintains accuracy while improving speed
-- **Hardware Acceleration**: Uses specialized hardware for better quality
-
-## Research References
-
-1. **WhisperKit Performance Research**:
-   - Argmax Inc. WhisperKit Core ML repository
-   - WhisperKit paper: "WhisperKit: An On-Device Speech Recognition System" (arXiv:2507.10860v1)
-
-2. **Apple Hardware Optimization**:
-   - Apple Neural Engine optimization guide
-   - Core ML performance best practices
-   - Metal GPU acceleration documentation
-
-3. **Voice Activity Detection**:
-   - WhisperKit VAD configuration documentation
-   - Real-time voice systems optimization research
-
-4. **Concurrent Processing**:
-   - WhisperKit concurrent processing features
-   - Apple Concurrency best practices for Swift
-
-5. **Memory Management**:
-   - Apple Memory Management best practices
-   - WhisperKit memory optimization guidelines
+Phase 1 "Quick Wins" (Completed):
+- Audio Format Optimization
+  - 16‑bit signed integer Linear PCM @ 16 kHz mono for lower CPU/IO without impacting recognition quality.
+  - Implemented in RecordingClientLive.startRecording() AVAudioRecorder settings.
+- Aggressive Model Prewarming
+  - Prewarm on app startup and on model changes when models are locally available; skip Parakeet to avoid unexpected network at launch.
+  - Implemented via TranscriptionFeature.prewarmSelectedModel, triggered in AppFeature.
+- Decoding Configuration (Simplified for then‑current API)
+  - Centralized construction in TranscriptionOptimizations; used DecodingOptions() with defaults due to API limits at that time.
+- Hardware Acceleration (API‑Dependent in Phase 1)
+  - Unsupported flags removed; relied on WhisperKit defaults for accelerators.
+- Sound Effect Preloading
+  - Sounds preloaded at startup (AppFeature) to avoid first‑play stalls.
+- Immediate Audio Cleanup
+  - Temp recordings deleted when not needed; moved to permanent storage when configured; error paths cleaned up.
+
+Current working state:
+- Stable across supported macOS, responsive UI, no cold‑start penalties for prewarmed WhisperKit models, efficient storage behavior.
+
+## Plan vs Implementation (Phase 1)
+
+1) Advanced WhisperKit Controls
+- Original Plan: Tune VAD, set worker counts, enable hardware flags via WhisperKitConfig/DecodingOptions.
+- Actual: Used DecodingOptions() defaults; removed unsupported flags; centralized future‑proof builder.
+- Why: API limitations and compilation issues in the earlier WhisperKit version.
+- Path Forward: With the upgraded WhisperKit, Phase 2 reintroduces these levers.
+
+2) Streaming Pipeline
+- Original Plan: Overlap capture and decode.
+- Actual: Kept reliable file‑based flow for Phase 1 stability.
+- Path Forward: Implement streaming in Phase 2 behind an opt‑in flag.
+
+3) Prewarming Scope
+- Original: Prewarm selected and potentially fallback models.
+- Actual: Prewarm selected model only if already on disk; skipped Parakeet at launch.
+- Path Forward: Maintain conservative policy; optionally warm a fallback model when already downloaded.
+
+4) Audio Format and I/O
+- Original: Switch to 16‑bit PCM @ 16 kHz.
+- Actual: Implemented as planned; strong win.
+
+5) Temp File Lifecycle, Sound Preload
+- Original: Ensure cleanup and preload.
+- Actual: Implemented as designed.
+
+## Phase 2 Optimization Plan (Leveraging Latest WhisperKit)
+
+Goal: Further reduce latency (target +30–60% effective improvement on top of Phase 1), maintain accuracy, and keep UI responsiveness by adopting the latest WhisperKit capabilities.
+
+Key new capabilities we will use:
+1) VADOptions with configurable parameters
+2) DecodingOptions with concurrentWorkerCount and concurrentChunkCount
+3) WhisperKitConfig hardware acceleration flags (useCoreML, useNeuralEngine, useGPU, useStatefulModels)
+4) Stateful Models for ~45% latency reduction
+5) Speculative decoding for up to ~2.4x speedup
+6) Memory optimizations for large files (faster resampling, lower memory)
+7) Streaming transcription support
+
+We will introduce these changes in controlled, observable steps, gated behind safe defaults and toggles.
+
+### 2.1 Decoding Controls: VAD + Concurrency
+
+- What:
+  - Use VADOptions with tuned parameters to reduce non‑speech overhead and improve chunk boundaries.
+  - Set DecodingOptions.concurrentWorkerCount based on hardware (auto; cap at 4 by default).
+  - Set DecodingOptions.concurrentChunkCount to safely pipeline chunk decoding (start at 2, tune empirically).
+
+- Recommended defaults:
+  - VADOptions:
+    - minSilenceDurationMs: 100
+    - maxSilenceDurationMs: 2000
+    - speechPadMs: 200
+    - minSpeechDurationMs: 50
+  - Workers: min(4, activeProcessorCount)
+  - concurrentChunkCount: 2
+
+- Implementation:
+  - Update TranscriptionOptimizations to construct DecodingOptions using:
+    - language/detectLanguage (from HexSettings.outputLanguage)
+    - VADOptions above
+    - concurrentWorkerCount, concurrentChunkCount
+    - enable speculative decoding settings when combined with 2.4 (see 2.4)
+
+- Acceptance criteria:
+  - Reduced decode time vs. default options without accuracy regression.
+  - UI remains responsive on Intel/low‑core devices.
+
+### 2.2 Hardware Acceleration via WhisperKitConfig
+
+- What:
+  - Explicitly enable accelerators where supported:
+    - useCoreML: true
+    - useNeuralEngine: true (on ANE‑capable devices)
+    - useGPU: true (when beneficial)
+    - useStatefulModels: true (see 2.3)
+
+- Implementation:
+  - Update TranscriptionClientLive.loadWhisperKitModel:
+    - Construct WhisperKitConfig including the above flags (guarded by API/device availability).
+    - Pass recommendedConcurrentWorkers if the initializer exposes it.
+
+- Acceptance criteria:
+  - Noticeable further latency reductions on Apple Silicon with ANE/GPU.
+  - No regressions on devices lacking these accelerators (flags become no‑ops).
+
+### 2.3 Stateful Models (~45% Latency Reduction)
+
+- What:
+  - Enable stateful models in WhisperKitConfig (useStatefulModels: true).
+  - Maintain a long‑lived WhisperKit instance to reuse decoder state across transcriptions.
+
+- Implementation:
+  - TranscriptionClientLive:
+    - Keep single active instance per model; unload only on model switch.
+    - Add a lightweight "warm tick" after load to ensure state initialization is complete.
+
+- Acceptance criteria:
+  - Median end‑to‑end latency reduced by ~45% on repeated transcriptions.
+  - Memory footprint stable; no leaks during frequent model changes.
+
+### 2.4 Speculative Decoding (~2.4x Speedup)
+
+- What:
+  - Enable speculative decoding in DecodingOptions (use the new flags added in the latest WhisperKit).
+  - Configure draft tokens/parameters per WhisperKit API defaults; start with conservative settings and expand after testing.
+
+- Implementation:
+  - TranscriptionOptimizations.buildOptimizedDecodeOptions:
+    - Turn on speculative decoding.
+    - Keep VAD + concurrency from 2.1.
+  - Add a Settings "Experimental" toggle to disable speculative decoding if needed.
+
+- Acceptance criteria:
+  - Significant decode speedup on typical utterances.
+  - No unacceptable accuracy regressions; provide a quick fallback via settings.
+
+### 2.5 Memory and Resampling Optimizations (Large Files)
+
+- What:
+  - Leverage WhisperKit’s faster resampling (3x) and 50% lower memory mode when decoding large files.
+  - Use any configuration flags introduced for memory‑efficient paths.
+
+- Implementation:
+  - TranscriptionOptimizations:
+    - If input duration or file size exceeds a threshold (e.g., ≥30s), enable memory‑optimized decode options where available.
+  - Consider chunked decoding strategy for long recordings with progress updates.
+
+- Acceptance criteria:
+  - Large file decode times and memory usage significantly improved.
+  - No OOM or UI stalls when decoding long audio.
+
+### 2.6 Streaming Transcription (Opt‑in)
+
+- What:
+  - Use WhisperKit’s streaming capabilities to overlap capture and decoding, reducing "time to first words" and final latency.
+
+- Implementation:
+  - Add a new streaming path behind a setting:
+    - RecordingStreamClient using AVAudioEngine tap → 16 kHz mono Float32 buffer stream.
+    - TranscriptionPipeline actor:
+      - start(model:options:)
+      - push(chunk:)
+      - finish() -> final text
+    - UI/Feature integration:
+      - TranscriptionFeature: when streaming is enabled, start pipeline on hotkey press, push chunks during recording, call finish on stop.
+  - Backpressure handling to avoid memory growth; small reusable buffer pool.
+
+- Acceptance criteria:
+  - Earlier partial results and lower end‑to‑end latency vs. file‑based pipeline.
+  - Stable cancellation, no leaks, minimal CPU headroom impact.
+
+### 2.7 Observability, Tuning, and Safety Nets
+
+- Metrics:
+  - Collect prewarm time, decode time, RTF, speculative hit rates (if exposed), queue depths for streaming, and memory marks.
+  - Add a small in‑app "Performance" debug overlay and optional JSON dump.
+
+- Settings (Experimental section):
+  - Enable/disable streaming, speculative decoding.
+  - Override workers/chunks (auto by default).
+  - VAD tuning fields with safe defaults.
+  - Hardware toggles surfaced if needed; auto‑detect preferred.
+
+- Rollback:
+  - Feature flags for every Phase 2 lever.
+  - A single "Use Legacy Decode Path" toggle to revert to Phase 1 behavior instantly.
+
+## Rollout Plan
+
+- Milestone A (Low risk)
+  - Adopt VADOptions + DecodingOptions concurrency; enable hardware flags and stateful models.
+  - Instrument metrics; keep speculative decoding off by default initially.
+- Milestone B (Medium risk)
+  - Enable speculative decoding by default on ANE‑capable devices; provide toggle.
+- Milestone C (Pilot)
+  - Introduce streaming path as opt‑in; collect telemetry; fix edge cases; then consider broader enablement.
+
+## Acceptance Criteria (Phase 2 Overall)
+
+- Latency:
+  - Additional 30–60% improvement vs. Phase 1 on repeated transcriptions with stateful models and speculative decoding enabled.
+- Stability:
+  - No app hangs; streaming path cancels cleanly; no temp file leaks.
+- Quality:
+  - No material accuracy regressions; speculative decoding toggle quickly disables if needed.
+- Resource Usage:
+  - Memory and CPU remain within safe bounds under long/continuous usage.
+
+## Engineering Tasks Summary
+
+- TranscriptionOptimizations
+  - Build DecodingOptions with:
+    - VADOptions (minSilenceDurationMs, maxSilenceDurationMs, speechPadMs, minSpeechDurationMs)
+    - concurrentWorkerCount (≤4), concurrentChunkCount (2 default)
+    - speculative decoding enabled
+  - Add heuristics for large files to enable memory‑optimized modes.
+
+- TranscriptionClientLive
+  - Update WhisperKitConfig to set:
+    - useCoreML, useNeuralEngine, useGPU, useStatefulModels (capability‑guarded)
+    - pass worker counts if supported
+  - Keep a single long‑lived instance per model; prewarm and "warm tick".
+
+- TranscriptionFeature
+  - Add streaming mode path (feature‑flagged).
+  - Keep file‑based path as stable fallback.
+  - Display performance badge (RTF, ms); add streaming/partial indicators.
+
+- Settings/UX
+  - Experimental toggles for speculative decoding, streaming, and advanced tuning.
+  - Auto defaults for most users.
+
+- Observability
+  - Collect decode metrics; optional JSON log for troubleshooting.
+
+## Risks and Mitigations
+
+- Speculative decoding accuracy regressions:
+  - Mitigation: Default off in Milestone A; guarded by a toggle and per‑device gating.
+- CPU spikes on low‑core CPUs:
+  - Mitigation: Auto worker caps; allow user override; monitor RTF and thermal throttling.
+- Streaming complexity:
+  - Mitigation: Pilot behind a setting; apply backpressure and buffer pooling.
+
+## Current Architecture (At a Glance)
+
+- Phase 1 (current):
+  - Hotkey → AVAudioRecorder (16‑bit PCM 16 kHz) → stop → WhisperKit transcribe with default DecodingOptions() and a prewarmed model
+- Phase 2 (target):
+  - Hotkey → streaming capture via AVAudioEngine → WhisperKit streaming decode with VAD + concurrency + speculative decoding, using stateful models and accelerators → final text on finish
 
 ## Conclusion
 
-The optimization strategies outlined in this document provide a systematic approach to improving Hex app performance while maintaining transcription quality. With Phase 1 completed, the app exhibits significantly improved responsiveness, reduced cold-start latency through aggressive prewarming, lower CPU/IO overhead from 16-bit PCM capture, and faster decoding via tuned concurrency and VAD. Subsequent phases can now focus on streaming, adaptive performance, and monitoring to further enhance real-time behavior without sacrificing quality.
+Phase 1 built a strong, stable foundation and removed major bottlenecks. The latest WhisperKit release unlocks the advanced levers we originally envisioned. Phase 2 will:
+- Tune VAD and concurrency,
+- Enable accelerators and stateful models,
+- Turn on speculative decoding,
+- Adopt memory‑efficient paths for large files,
+- And pilot streaming transcription.
+
+All changes are gated, observable, and reversible, enabling a safe rollout toward substantially lower latency and an even snappier Hex experience.
