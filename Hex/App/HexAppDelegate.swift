@@ -109,10 +109,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		guard statusItem == nil else { return }
 		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 		if let button = statusItem.button {
-			let image = NSImage(named: NSImage.Name("HexStatusIcon"))
-			image?.isTemplate = true
-			image?.size = NSSize(width: 18, height: 18)
-			button.image = image
+			button.image = NSImage(named: NSImage.Name("HexStatusIcon"))
 			button.imageScaling = .scaleProportionallyDown
 			button.imagePosition = .imageOnly
 			button.toolTip = "Hex"
