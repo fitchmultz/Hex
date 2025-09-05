@@ -464,6 +464,9 @@
         }
       }
     },
+    "Quit %@" : {
+      "comment" : "Quit application menu item"
+    },
     "Recommended for custom hotkeys to avoid interfering with normal usage" : {
 
     },
