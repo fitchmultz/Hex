@@ -147,7 +147,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 
 	@objc
 	private func checkForUpdatesAction(_ sender: Any?) {
-		updaterController.checkForUpdates(sender)
+		updatesViewModel.controller.checkForUpdates(sender)
 	}
 
 	@objc
