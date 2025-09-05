@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import Sparkle
 
+@MainActor
 class HexAppDelegate: NSObject, NSApplicationDelegate {
 	var invisibleWindow: InvisibleWindow?
 	var settingsWindow: NSWindow?
@@ -84,12 +85,9 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	@objc private func handleAppModeUpdate() {
-		Task {
-			await updateAppMode()
-		}
+		updateAppMode()
 	}
 
-	@MainActor
 	private func updateAppMode() {
 		print("hexSettings.showDockIcon: \(hexSettings.showDockIcon)")
 		if hexSettings.showDockIcon {
@@ -104,7 +102,6 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		return true
 	}
 
-	@MainActor
 	private func setupStatusItem() {
 		guard statusItem == nil else { return }
 		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -118,7 +115,6 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		statusItem.menu = statusMenu
 	}
 
-	@MainActor
 	private func rebuildStatusMenu() {
 		let menu = NSMenu()
 		menu.autoenablesItems = true

@@ -2,33 +2,64 @@ import Foundation
 import WhisperKit
 
 enum TranscriptionOptimizations {
-    /// Returns a recommended number of concurrent workers based on active CPU cores,
-    /// capped at a safe upper bound to avoid oversubscription on smaller machines.
-    static func recommendedConcurrentWorkers() -> Int {
+    // Determine recommended concurrent workers with optional override (cap at 4)
+    static func recommendedConcurrentWorkers(override: Int?) -> Int {
         let cores = ProcessInfo.processInfo.activeProcessorCount
-        // Cap at 4 to keep UI responsive while maintaining good throughput.
-        return max(1, min(4, cores))
+        let cap = 4
+        if let override, override > 0 {
+            return max(1, min(override, cap))
+        }
+        return max(1, min(cores, cap))
     }
 
-    /// Builds optimized decoding options using the currently supported WhisperKit API.
-    /// Concurrency and hardware acceleration are configured via WhisperKitConfig
-    /// (see TranscriptionClientLive.loadWhisperKitModel). Many WhisperKit versions
-    /// expose a simple DecodingOptions initializer; advanced VAD/chunking parameters
-    /// are configured elsewhere or not available on all versions.
-    ///
-    /// - Parameters:
-    ///   - language: Desired output language, or nil to allow automatic detection.
-    ///   - concurrentChunkCount: Retained for compatibility; concurrency is primarily
-    ///                           handled in WhisperKitConfig.
-    /// - Returns: A DecodingOptions configured with safe defaults.
-    static func buildOptimizedDecodeOptions(
-        language: String?,
-        concurrentChunkCount: Int = 2
-    ) -> DecodingOptions {
-        // Use the initializer supported broadly across WhisperKit versions.
-        // Language detection behavior is handled by the model/runtime when language is nil.
-        // If your WhisperKit version later exposes language/task/etc., they can be set here.
-        let options = DecodingOptions()
+    // Build DecodingOptions using only supported fields in the current WhisperKit API
+    // - Uses ChunkingStrategy.vad when enabled; otherwise .none
+    // - Sets language and detectLanguage appropriately
+    // - Applies concurrentWorkerCount if enabled; no concurrentChunkCount/vadOptions usage
+    static func buildOptimizedDecodeOptions(language: String?, settings: HexSettings) -> DecodingOptions {
+        var options = DecodingOptions()
+
+        if let lang = language, !lang.isEmpty {
+            options.language = lang
+            options.detectLanguage = false
+        } else {
+            options.language = nil
+            options.detectLanguage = true
+        }
+
+        if settings.useLegacyDecodePath {
+            // Phase 1 fallback
+            options.chunkingStrategy = ChunkingStrategy.none
+            options.concurrentWorkerCount = 1
+            return options
+        }
+
+        // Phase 2 Milestone A: tuned VAD and bounded concurrency (supported API only)
+        options.chunkingStrategy = settings.enableVADTuning ? ChunkingStrategy.vad : ChunkingStrategy.none
+
+        let workers: Int
+        if settings.enableConcurrentDecoding {
+            workers = recommendedConcurrentWorkers(override: settings.concurrentWorkerOverride)
+        } else {
+            workers = 1
+        }
+        options.concurrentWorkerCount = max(1, workers)
+
+        return options
+    }
+
+    // Backward-compatible overload (Phase 1 default behavior)
+    static func buildOptimizedDecodeOptions(language: String?) -> DecodingOptions {
+        var options = DecodingOptions()
+        if let lang = language, !lang.isEmpty {
+            options.language = lang
+            options.detectLanguage = false
+        } else {
+            options.language = nil
+            options.detectLanguage = true
+        }
+        options.chunkingStrategy = ChunkingStrategy.none
+        options.concurrentWorkerCount = 1
         return options
     }
 }

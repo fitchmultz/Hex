@@ -24,6 +24,24 @@ struct HexSettings: Codable, Equatable {
 	var useDoubleTapOnly: Bool = false
 	var outputLanguage: String? = nil
 	var selectedMicrophoneID: String? = nil
+	// Master rollback switch (revert to Phase 1 behavior instantly)
+	var useLegacyDecodePath: Bool = false
+
+	// Sub-feature flags (gated under master switch by call sites)
+	var enableVADTuning: Bool = true
+	var enableConcurrentDecoding: Bool = true
+	var enableHardwareAcceleration: Bool = true
+	var useStatefulModels: Bool = true
+
+	// Concurrency tunables
+	var concurrentWorkerOverride: Int? = nil // nil => auto (recommended)
+	var concurrentChunkCount: Int = 2       // default pipelining
+
+	// VAD tunables (nil => use TranscriptionOptimizations defaults)
+	var vadMinSilenceMs: Int? = nil
+	var vadMaxSilenceMs: Int? = nil
+	var vadSpeechPadMs: Int? = nil
+	var vadMinSpeechMs: Int? = nil
 
 	// New setting replacing the old boolean flag
 	var historyStorageMode: HistoryStorageMode = .textAndAudio
@@ -53,6 +71,19 @@ struct HexSettings: Codable, Equatable {
 		case useDoubleTapOnly
 		case outputLanguage
 		case selectedMicrophoneID
+		// New Phase 2 Milestone A keys
+		case useLegacyDecodePath
+		case enableVADTuning
+		case enableConcurrentDecoding
+		case enableHardwareAcceleration
+		case useStatefulModels
+		case concurrentWorkerOverride
+		case concurrentChunkCount
+		case vadMinSilenceMs
+		case vadMaxSilenceMs
+		case vadSpeechPadMs
+		case vadMinSpeechMs
+		// Existing keys following new additions
 		case historyStorageMode
 		case maxHistoryEntries
 		case didCompleteFirstRun
@@ -122,6 +153,19 @@ struct HexSettings: Codable, Equatable {
 		outputLanguage = try container.decodeIfPresent(String.self, forKey: .outputLanguage)
 		selectedMicrophoneID = try container.decodeIfPresent(String.self, forKey: .selectedMicrophoneID)
 
+		// Phase 2 Milestone A: master rollback + sub-feature flags and tunables
+		useLegacyDecodePath = try container.decodeIfPresent(Bool.self, forKey: .useLegacyDecodePath) ?? false
+		enableVADTuning = try container.decodeIfPresent(Bool.self, forKey: .enableVADTuning) ?? true
+		enableConcurrentDecoding = try container.decodeIfPresent(Bool.self, forKey: .enableConcurrentDecoding) ?? true
+		enableHardwareAcceleration = try container.decodeIfPresent(Bool.self, forKey: .enableHardwareAcceleration) ?? true
+		useStatefulModels = try container.decodeIfPresent(Bool.self, forKey: .useStatefulModels) ?? true
+		concurrentWorkerOverride = try container.decodeIfPresent(Int.self, forKey: .concurrentWorkerOverride)
+		concurrentChunkCount = try container.decodeIfPresent(Int.self, forKey: .concurrentChunkCount) ?? 2
+		vadMinSilenceMs = try container.decodeIfPresent(Int.self, forKey: .vadMinSilenceMs)
+		vadMaxSilenceMs = try container.decodeIfPresent(Int.self, forKey: .vadMaxSilenceMs)
+		vadSpeechPadMs = try container.decodeIfPresent(Int.self, forKey: .vadSpeechPadMs)
+		vadMinSpeechMs = try container.decodeIfPresent(Int.self, forKey: .vadMinSpeechMs)
+
 		// Migration: prefer new enum, else map legacy boolean (defaulting to true)
 		if let mode = try container.decodeIfPresent(HistoryStorageMode.self, forKey: .historyStorageMode) {
 			historyStorageMode = mode
@@ -151,6 +195,20 @@ struct HexSettings: Codable, Equatable {
 		try container.encode(useDoubleTapOnly, forKey: .useDoubleTapOnly)
 		try container.encodeIfPresent(outputLanguage, forKey: .outputLanguage)
 		try container.encodeIfPresent(selectedMicrophoneID, forKey: .selectedMicrophoneID)
+
+		// Phase 2 Milestone A
+		try container.encode(useLegacyDecodePath, forKey: .useLegacyDecodePath)
+		try container.encode(enableVADTuning, forKey: .enableVADTuning)
+		try container.encode(enableConcurrentDecoding, forKey: .enableConcurrentDecoding)
+		try container.encode(enableHardwareAcceleration, forKey: .enableHardwareAcceleration)
+		try container.encode(useStatefulModels, forKey: .useStatefulModels)
+		try container.encodeIfPresent(concurrentWorkerOverride, forKey: .concurrentWorkerOverride)
+		try container.encode(concurrentChunkCount, forKey: .concurrentChunkCount)
+		try container.encodeIfPresent(vadMinSilenceMs, forKey: .vadMinSilenceMs)
+		try container.encodeIfPresent(vadMaxSilenceMs, forKey: .vadMaxSilenceMs)
+		try container.encodeIfPresent(vadSpeechPadMs, forKey: .vadSpeechPadMs)
+		try container.encodeIfPresent(vadMinSpeechMs, forKey: .vadMinSpeechMs)
+
 		try container.encode(historyStorageMode, forKey: .historyStorageMode)
 		try container.encodeIfPresent(maxHistoryEntries, forKey: .maxHistoryEntries)
 		try container.encode(didCompleteFirstRun, forKey: .didCompleteFirstRun)

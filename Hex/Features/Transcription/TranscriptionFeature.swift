@@ -325,6 +325,8 @@ private extension TranscriptionFeature {
       guard let startTime = state.recordingStartTime else { return 0 }
       return Date().timeIntervalSince(startTime)
     }()
+    // Build optimized decode options once outside the effect to avoid capturing inout state
+    let decodeOptions = TranscriptionOptimizations.buildOptimizedDecodeOptions(language: language, settings: state.hexSettings)
 
     return .run { send in
       do {
@@ -333,8 +335,7 @@ private extension TranscriptionFeature {
         await soundEffect.play(.stopRecording)
         await send(.setLastRecordingURL(audioURL))
 
-        // Create optimized transcription options with tuned VAD and bounded concurrency
-        let decodeOptions = TranscriptionOptimizations.buildOptimizedDecodeOptions(language: language)
+        // Use previously built optimized decode options
         let t0 = Date()
         let result = try await transcription.transcribe(audioURL, model, decodeOptions) { _ in }
         let latency = Date().timeIntervalSince(t0)
@@ -361,6 +362,8 @@ private extension TranscriptionFeature {
 private extension TranscriptionFeature {
   func prewarmSelectedModelEffect(_ state: inout State) -> Effect<Action> {
     let model = state.hexSettings.selectedModel
+    // Build optimized decode options to respect current settings; currently unused in prewarm, but validates configuration and future-proofs usage
+    let _ = TranscriptionOptimizations.buildOptimizedDecodeOptions(language: state.hexSettings.outputLanguage, settings: state.hexSettings)
     return .run { send in
       await withTaskCancellationHandler {
         let lowercased = model.lowercased()

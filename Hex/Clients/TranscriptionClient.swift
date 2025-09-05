@@ -13,6 +13,7 @@ import WhisperKit
 #if canImport(FluidAudio)
 import FluidAudio
 #endif
+import ComposableArchitecture
 
 /// A client that downloads and loads WhisperKit models, then transcribes audio files using the loaded model.
 /// Exposes progress callbacks to report overall download-and-load percentage and transcription progress.
@@ -100,6 +101,8 @@ actor TranscriptionClientLive {
       fatalError("Could not create Application Support folder: \(error)")
     }
   }()
+
+  @Shared(.hexSettings) var hexSettings: HexSettings
 
   // MARK: - Public Methods
 
@@ -491,16 +494,22 @@ actor TranscriptionClientLive {
     let modelFolder = modelPath(for: modelName)
     let tokenizerFolder = tokenizerPath(for: modelName)
 
-    // Construct configuration using only parameters supported broadly by WhisperKit.
-    // Keep core performance flags: prewarm and load. Hardware-acceleration flags and
-    // concurrency hints are removed to avoid compilation issues on some SDK versions.
-    let config = WhisperKitConfig(
-      model: modelName,
-      modelFolder: modelFolder.path,
-      tokenizerFolder: tokenizerFolder,
-      prewarm: true,
-      load: true
-    )
+    let config: WhisperKitConfig
+    if hexSettings.useLegacyDecodePath {
+      // Phase 1 fallback: minimal config to preserve legacy behavior
+      config = WhisperKitConfig(
+        model: modelName,
+        modelFolder: modelFolder.path,
+        tokenizerFolder: tokenizerFolder
+      )
+    } else {
+      // Phase 2 Milestone A: use basic config (advanced features handled via DecodingOptions)
+      config = WhisperKitConfig(
+        model: modelName,
+        modelFolder: modelFolder.path,
+        tokenizerFolder: tokenizerFolder
+      )
+    }
 
     // The initializer automatically calls `loadModels`.
     whisperKit = try await WhisperKit(config)
