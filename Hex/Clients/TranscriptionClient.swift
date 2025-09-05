@@ -491,7 +491,11 @@ actor TranscriptionClientLive {
     let modelFolder = modelPath(for: modelName)
     let tokenizerFolder = tokenizerPath(for: modelName)
 
-    // Use WhisperKit's config to load the model
+    // Compute recommended concurrency for this device (bounded to keep UI responsive)
+    let workers = recommendedConcurrentWorkers()
+
+    // Use WhisperKit's config to load the model with performance-oriented settings.
+    // Note: Hardware acceleration flags may be ignored by older WhisperKit builds.
     let config = WhisperKitConfig(
       model: modelName,
       modelFolder: modelFolder.path,
@@ -499,7 +503,14 @@ actor TranscriptionClientLive {
       // verbose: true,
       // logLevel: .debug,
       prewarm: true,
-      load: true
+      load: true,
+      // Hardware acceleration and stateful model usage (when supported by WhisperKit):
+      useCoreML: true,
+      useNeuralEngine: true,
+      useGPU: true,
+      useStatefulModels: true,
+      // Concurrency hints:
+      concurrentWorkerCount: workers
     )
 
     // The initializer automatically calls `loadModels`.
@@ -659,5 +670,10 @@ private extension TranscriptionClientLive {
     }
 
     return output
+  }
+
+  func recommendedConcurrentWorkers() -> Int {
+    // Delegate to centralized optimization utility to avoid duplication.
+    return TranscriptionOptimizations.recommendedConcurrentWorkers()
   }
 }

@@ -570,12 +570,13 @@ actor RecordingClientLive {
       print("Using default system microphone")
     }
 
+// Use 16-bit integer PCM for better performance while preserving transcription quality
     let settings: [String: Any] = [
       AVFormatIDKey: Int(kAudioFormatLinearPCM),
       AVSampleRateKey: 16000.0,
       AVNumberOfChannelsKey: 1,
-      AVLinearPCMBitDepthKey: 32,
-      AVLinearPCMIsFloatKey: true,
+      AVLinearPCMBitDepthKey: 16, // 16-bit
+      AVLinearPCMIsFloatKey: false, // Signed integer PCM
       AVLinearPCMIsBigEndianKey: false,
       AVLinearPCMIsNonInterleaved: false,
     ]

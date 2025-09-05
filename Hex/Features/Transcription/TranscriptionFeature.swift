@@ -46,6 +46,9 @@ struct TranscriptionFeature {
     case cancel
     case cancelPrewarm
 
+    // Prewarm actions
+    case prewarmSelectedModel
+
     // Transcription result flow
     case transcriptionResult(String)
     case transcriptionError(Error)
@@ -111,6 +114,11 @@ struct TranscriptionFeature {
 
       case .stopRecording:
         return handleStopRecording(&state)
+
+      // MARK: - Model Prewarm
+
+      case .prewarmSelectedModel:
+        return prewarmSelectedModelEffect(&state)
 
       // MARK: - Transcription Results
 
@@ -325,12 +333,8 @@ private extension TranscriptionFeature {
         await soundEffect.play(.stopRecording)
         await send(.setLastRecordingURL(audioURL))
 
-        // Create transcription options with the selected language
-        let decodeOptions = DecodingOptions(
-          language: language,
-          detectLanguage: language == nil, // Only auto-detect if no language specified
-          chunkingStrategy: .vad
-        )
+        // Create optimized transcription options with tuned VAD and bounded concurrency
+        let decodeOptions = TranscriptionOptimizations.buildOptimizedDecodeOptions(language: language)
         let t0 = Date()
         let result = try await transcription.transcribe(audioURL, model, decodeOptions) { _ in }
         let latency = Date().timeIntervalSince(t0)
@@ -425,8 +429,16 @@ private extension TranscriptionFeature {
     state.isPrewarming = false
     state.error = error.localizedDescription
 
+    // Capture and clear the temp URL to avoid reuse and to clean up safely
+    let tempURL = state.lastRecordingURL
+    state.lastRecordingURL = nil
+
     return .run { _ in
       await soundEffect.play(.cancel)
+      if let url = tempURL {
+        // Best-effort cleanup of temporary recording file on error paths
+        try? await fileClient.removeItem(url)
+      }
     }
   }
 
