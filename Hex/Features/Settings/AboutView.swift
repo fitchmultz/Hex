@@ -39,7 +39,7 @@ struct AboutView: View {
                     Spacer()
                     Link("Visit our GitHub", destination: URL(string: "https://github.com/kitlangton/Hex/")!)
                 }
-                
+
                 HStack {
                     Label("Support the developer", systemImage: "heart")
                     Spacer()

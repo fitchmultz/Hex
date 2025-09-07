@@ -156,8 +156,7 @@ extension HotKeyProcessor {
             if isReleaseForActiveHotkey(e) {
                 // Check if this release is close to the prior release => double-tap lock
                 if let prevReleaseTime = lastTapAt,
-                   now.timeIntervalSince(prevReleaseTime) < Self.doubleTapThreshold
-                {
+                   now.timeIntervalSince(prevReleaseTime) < Self.doubleTapThreshold {
                     // => Switch to doubleTapLock, remain matched, no new output
                     state = .doubleTapLock
                     return nil
