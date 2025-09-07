@@ -233,17 +233,17 @@ struct SettingsView: View {
 					Image(systemName: "zzz")
 				}
 
-				Label {
-					Toggle(
-						"Pause Media while Recording",
-						isOn: Binding(
-							get: { store.hexSettings.pauseMediaOnRecord },
-							set: { store.send(.togglePauseMediaOnRecord($0)) }
-						)
-					)
-				} icon: {
-					Image(systemName: "pause")
-				}
+                Label {
+                    Toggle(
+                        "Mute while recording",
+                        isOn: Binding(
+                            get: { store.hexSettings.pauseMediaOnRecord },
+                            set: { store.send(.togglePauseMediaOnRecord($0)) }
+                        )
+                    )
+                } icon: {
+                    Image(systemName: "speaker.slash")
+                }
 			} header: {
 				Text("General")
 			}

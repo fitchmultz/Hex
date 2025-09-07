@@ -420,13 +420,13 @@
     "Parakeet downloads on first use (no manual step)" : {
 
     },
-    "Pause Media while Recording" : {
-      "comment" : "Label for general setting whether to pause media while recording.",
+    "Mute while recording" : {
+      "comment" : "Label for general setting whether to mute system output while recording.",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Medien während der Aufnahme pausieren"
+            "value" : "Während der Aufnahme stummschalten"
           }
         }
       }
@@ -463,6 +463,9 @@
           }
         }
       }
+    },
+    "Quit %@" : {
+      "comment" : "Quit application menu item"
     },
     "Recommended for custom hotkeys to avoid interfering with normal usage" : {
 

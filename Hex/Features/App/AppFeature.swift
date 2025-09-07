@@ -31,6 +31,7 @@ struct AppFeature {
     case settings(SettingsFeature.Action)
     case history(HistoryFeature.Action)
     case setActiveTab(ActiveTab)
+    case task
   }
 
   var body: some ReducerOf<Self> {
@@ -50,13 +51,21 @@ struct AppFeature {
 
     Reduce { state, action in
       switch action {
+      case .task:
+        return .run { _ in
+          @Dependency(\.soundEffects) var soundEffects
+          await soundEffects.preloadSounds()
+        }
       case .binding:
         return .none
       case .transcription:
         return .none
       case .settings(.modelDownload(.selectModel(_))):
-        // Cancel any ongoing prewarm when the selected model changes
-        return .send(.transcription(.cancelPrewarm))
+        // Cancel any ongoing prewarm when the selected model changes and start prewarming the new selection
+        return .merge(
+          .send(.transcription(.cancelPrewarm)),
+          .send(.transcription(.prewarmSelectedModel))
+        )
       case .settings:
         return .none
       case .history(.navigateToSettings):
@@ -112,6 +121,9 @@ struct AppView: View {
         AboutView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("About")
       }
+    }
+    .task {
+      await store.send(.task).finish()
     }
     .enableInjection()
   }

@@ -10,9 +10,11 @@ import Dependencies
 import DependenciesMacros
 import Foundation
 import WhisperKit
+import CoreML
 #if canImport(FluidAudio)
 import FluidAudio
 #endif
+import ComposableArchitecture
 
 /// A client that downloads and loads WhisperKit models, then transcribes audio files using the loaded model.
 /// Exposes progress callbacks to report overall download-and-load percentage and transcription progress.
@@ -100,6 +102,8 @@ actor TranscriptionClientLive {
       fatalError("Could not create Application Support folder: \(error)")
     }
   }()
+
+  @Shared(.hexSettings) var hexSettings: HexSettings
 
   // MARK: - Public Methods
 
@@ -491,16 +495,30 @@ actor TranscriptionClientLive {
     let modelFolder = modelPath(for: modelName)
     let tokenizerFolder = tokenizerPath(for: modelName)
 
-    // Use WhisperKit's config to load the model
-    let config = WhisperKitConfig(
-      model: modelName,
-      modelFolder: modelFolder.path,
-      tokenizerFolder: tokenizerFolder,
-      // verbose: true,
-      // logLevel: .debug,
-      prewarm: true,
-      load: true
-    )
+    // Build compute options (nil => CPU-only / legacy fallback)
+    let computeOptions = TranscriptionOptimizations.buildComputeOptions(for: modelName, settings: hexSettings)
+
+    // Debug logging for hardware acceleration status
+    let hwRequested = (hexSettings.enableHardwareAcceleration && !hexSettings.useLegacyDecodePath)
+    print("[TranscriptionClientLive] Hardware acceleration \(hwRequested ? "requested" : "not requested"); computeOptions \(computeOptions == nil ? "nil (CPU/legacy path)" : "provided")")
+
+    let config: WhisperKitConfig
+    if let computeOptions {
+      // Hardware acceleration path
+      config = WhisperKitConfig(
+        model: modelName,
+        modelFolder: modelFolder.path,
+        tokenizerFolder: tokenizerFolder,
+        computeOptions: computeOptions
+      )
+    } else {
+      // Legacy/CPU-only path
+      config = WhisperKitConfig(
+        model: modelName,
+        modelFolder: modelFolder.path,
+        tokenizerFolder: tokenizerFolder
+      )
+    }
 
     // The initializer automatically calls `loadModels`.
     whisperKit = try await WhisperKit(config)
@@ -510,7 +528,7 @@ actor TranscriptionClientLive {
     loadingProgress.completedUnitCount = 100
     progressCallback(loadingProgress)
 
-    print("[TranscriptionClientLive] Loaded WhisperKit model: \(modelName)")
+    print("[TranscriptionClientLive] Loaded WhisperKit model: \(modelName) (HWAccel: \(computeOptions != nil ? "ON" : "OFF"))")
   }
 
   /// Moves all items from `sourceFolder` into `destFolder` (shallow move of directory contents).
@@ -660,4 +678,5 @@ private extension TranscriptionClientLive {
 
     return output
   }
+
 }
