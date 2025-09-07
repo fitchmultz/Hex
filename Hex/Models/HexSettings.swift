@@ -30,6 +30,13 @@ struct HexSettings: Codable, Equatable {
 	// Sub-feature flags (gated under master switch by call sites)
 	var enableVADTuning: Bool = true
 	var enableConcurrentDecoding: Bool = true
+	/// Controls hardware acceleration for WhisperKit model loading.
+	/// - When true and `useLegacyDecodePath` is false, Hex provides ModelComputeOptions to WhisperKitConfig
+	///   with `melCompute`, `audioEncoderCompute`, `textDecoderCompute`, and `prefillCompute` set to `.all`,
+	///   enabling GPU and Neural Engine acceleration on Apple Silicon (Core ML falls back to CPU on systems
+	///   without those accelerators).
+	/// - When false, or when `useLegacyDecodePath` is true, Hex omits computeOptions and uses CPU-only/legacy decoding.
+	/// Changes take effect on the next model load or reload. See TranscriptionOptimizations.buildComputeOptions(for:settings:).
 	var enableHardwareAcceleration: Bool = true
 	var useStatefulModels: Bool = true
 

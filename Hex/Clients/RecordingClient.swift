@@ -286,11 +286,14 @@ actor RecordingClientLive {
 
   @Shared(.hexSettings) var hexSettings: HexSettings
 
-  /// Tracks whether media was paused using the media key when recording started.
-  private var didPauseMedia: Bool = false
-
-  /// Tracks which specific media players were paused
-  private var pausedPlayers: [String] = []
+  // MARK: - Output audio mute/volume state while recording
+  // Instead of pausing media apps (which can break with VLC),
+  // we mute the default output device while recording and restore afterwards.
+  private var outputDeviceAtStart: AudioDeviceID?
+  private var previousOutputMute: Bool?
+  private var previousOutputVolume: Float?
+  private var didSetOutputMute = false
+  private var didSetOutputVolume = false
 
   /// Stores the system's previous default input device so we can restore it after recording
   private var previousDefaultInputDevice: AudioDeviceID?
@@ -380,6 +383,200 @@ actor RecordingClientLive {
     }
 
     return deviceIDs
+  }
+
+  // MARK: - Output device helpers (mute/volume)
+
+  /// Get the current default output device ID
+  private func getDefaultOutputDeviceID() -> AudioDeviceID? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+
+    var deviceID = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+
+    let status = AudioObjectGetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      0,
+      nil,
+      &size,
+      &deviceID
+    )
+
+    if status != 0 {
+      print("Error getting default output device: \(status)")
+      return nil
+    }
+    return deviceID
+  }
+
+  /// Try to read the output mute state (master element). Returns nil if unsupported.
+  private func getOutputMute(deviceID: AudioDeviceID) -> Bool? {
+    var mute: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyMute,
+      mScope: kAudioDevicePropertyScopeOutput,
+      mElement: kAudioObjectPropertyElementMain
+    )
+
+    guard AudioObjectHasProperty(deviceID, &address) else { return nil }
+    let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &mute)
+    if status != 0 { return nil }
+    return mute != 0
+  }
+
+  /// Try to set the output mute state. Falls back to channel 1/2 if master fails.
+  private func setOutputMute(deviceID: AudioDeviceID, muted: Bool) -> Bool {
+    var value: UInt32 = muted ? 1 : 0
+    let size = UInt32(MemoryLayout<UInt32>.size)
+
+    // Try master element first
+    var masterAddr = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyMute,
+      mScope: kAudioDevicePropertyScopeOutput,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    if AudioObjectHasProperty(deviceID, &masterAddr) {
+      let status = AudioObjectSetPropertyData(deviceID, &masterAddr, 0, nil, size, &value)
+      if status == 0 { return true }
+    }
+
+    // Fall back to L/R channels (1 and 2)
+    var success = false
+    for ch in [UInt32(1), UInt32(2)] {
+      var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyMute,
+        mScope: kAudioDevicePropertyScopeOutput,
+        mElement: ch
+      )
+      if AudioObjectHasProperty(deviceID, &addr) {
+        let status = AudioObjectSetPropertyData(deviceID, &addr, 0, nil, size, &value)
+        success = success || (status == 0)
+      }
+    }
+    return success
+  }
+
+  /// Read output volume (virtual master if available; otherwise channel 1)
+  private func getOutputVolume(deviceID: AudioDeviceID) -> Float? {
+    // Prefer virtual master volume
+    var vol: Float32 = 0
+    var size = UInt32(MemoryLayout<Float32>.size)
+    var vmAddr = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+      mScope: kAudioDevicePropertyScopeOutput,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    if AudioObjectHasProperty(deviceID, &vmAddr) {
+      let status = AudioObjectGetPropertyData(deviceID, &vmAddr, 0, nil, &size, &vol)
+      if status == 0 { return Float(vol) }
+    }
+
+    // Fall back to channel 1 scalar
+    var ch1Addr = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyVolumeScalar,
+      mScope: kAudioDevicePropertyScopeOutput,
+      mElement: 1
+    )
+    if AudioObjectHasProperty(deviceID, &ch1Addr) {
+      let status = AudioObjectGetPropertyData(deviceID, &ch1Addr, 0, nil, &size, &vol)
+      if status == 0 { return Float(vol) }
+    }
+
+    return nil
+  }
+
+  /// Set output volume (virtual master if available; otherwise channel 1 and 2)
+  private func setOutputVolume(deviceID: AudioDeviceID, volume: Float) -> Bool {
+    var vol: Float32 = max(0, min(1, Float32(volume)))
+    let size = UInt32(MemoryLayout<Float32>.size)
+    var vmAddr = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+      mScope: kAudioDevicePropertyScopeOutput,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    if AudioObjectHasProperty(deviceID, &vmAddr) {
+      let status = AudioObjectSetPropertyData(deviceID, &vmAddr, 0, nil, size, &vol)
+      if status == 0 { return true }
+    }
+
+    // Fall back to per-channel
+    var success = false
+    for ch in [UInt32(1), UInt32(2)] {
+      var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyVolumeScalar,
+        mScope: kAudioDevicePropertyScopeOutput,
+        mElement: ch
+      )
+      if AudioObjectHasProperty(deviceID, &addr) {
+        let status = AudioObjectSetPropertyData(deviceID, &addr, 0, nil, size, &vol)
+        success = success || (status == 0)
+      }
+    }
+    return success
+  }
+
+  /// Safely mute the default output, preserving previous state for restoration.
+  private func muteDefaultOutputSafely() async {
+    guard let outputID = getDefaultOutputDeviceID() else { return }
+    outputDeviceAtStart = outputID
+
+    // Remember existing states
+    previousOutputMute = getOutputMute(deviceID: outputID)
+    previousOutputVolume = getOutputVolume(deviceID: outputID)
+
+    // Try mute first
+    if setOutputMute(deviceID: outputID, muted: true) {
+      didSetOutputMute = true
+      didSetOutputVolume = false
+      print("Muted default output for recording.")
+      return
+    }
+
+    // Fallback: set volume to zero (only if it meaningfully changes)
+    if let currentVol = previousOutputVolume, currentVol > 0.001 {
+      if setOutputVolume(deviceID: outputID, volume: 0.0) {
+        didSetOutputMute = false
+        didSetOutputVolume = true
+        print("Set default output volume to 0 for recording.")
+      }
+    }
+  }
+
+  /// Restore the default output's prior mute/volume state if we changed it.
+  private func restoreDefaultOutputSafely() async {
+    guard let outputID = outputDeviceAtStart else { resetOutputStateTracking(); return }
+
+    defer { resetOutputStateTracking() }
+
+    if didSetOutputMute {
+      if let prev = previousOutputMute {
+        _ = setOutputMute(deviceID: outputID, muted: prev)
+        print("Restored output mute to previous state: \(prev)")
+      } else {
+        // If we couldn't read it before, unmute to be safe
+        _ = setOutputMute(deviceID: outputID, muted: false)
+        print("Restored output mute to unmuted (best effort)")
+      }
+    } else if didSetOutputVolume {
+      if let prevVol = previousOutputVolume {
+        _ = setOutputVolume(deviceID: outputID, volume: prevVol)
+        print("Restored output volume to previous value: \(prevVol)")
+      }
+    }
+  }
+
+  private func resetOutputStateTracking() {
+    outputDeviceAtStart = nil
+    previousOutputMute = nil
+    previousOutputVolume = nil
+    didSetOutputMute = false
+    didSetOutputVolume = false
   }
 
   /// Get device name for the given device ID
@@ -523,26 +720,9 @@ actor RecordingClientLive {
   }
 
   func startRecording() async {
-    // If audio is playing on the default output, pause it.
+    // Mute system output instead of pausing apps (safer; avoids VLC issues)
     if hexSettings.pauseMediaOnRecord {
-      // First, pause all media applications using their AppleScript interface for precise control.
-      pausedPlayers = await pauseAllMediaApplications()
-      if !pausedPlayers.isEmpty {
-        print("Paused media players: \(pausedPlayers.joined(separator: ", "))")
-      }
-
-      // Conditionally send the media key only if media is currently playing (e.g., browser playback)
-      let isPlaying = await isAudioPlayingOnDefaultOutput()
-      if isPlaying {
-        await MainActor.run {
-          sendMediaKey()
-        }
-        didPauseMedia = true
-        print("Sent media key to pause generic/browser media for recording.")
-      } else {
-        didPauseMedia = false
-        print("No generic media playing; did not send media key.")
-      }
+      await muteDefaultOutputSafely()
     }
 
     // If user has selected a specific microphone, verify it exists and set it as the default input device
@@ -602,21 +782,8 @@ actor RecordingClientLive {
     stopMeterTask()
     print("Recording stopped.")
 
-    // First, resume generic/browser media if we toggled it with the media key
-    if didPauseMedia {
-      await MainActor.run {
-        sendMediaKey()
-      }
-      didPauseMedia = false
-      print("Resuming previously paused media via media key.")
-    }
-
-    // Then resume any specific media players we paused via AppleScript
-    if !pausedPlayers.isEmpty {
-      print("Resuming previously paused players: \(pausedPlayers.joined(separator: ", "))")
-      await resumeMediaApplications(pausedPlayers)
-      pausedPlayers = []
-    }
+    // Restore system output state (mute/volume) if we changed it
+    await restoreDefaultOutputSafely()
 
     // Restore the previous default input device if we changed it
     if let prevDevice = previousDefaultInputDevice {

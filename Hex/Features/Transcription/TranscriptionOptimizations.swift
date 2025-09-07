@@ -1,11 +1,39 @@
 import Foundation
 import WhisperKit
+import CoreML
 
 enum TranscriptionOptimizations {
+    static func buildComputeOptions(for _: String, settings: HexSettings) -> ModelComputeOptions? {
+        // Respect legacy path or explicit disablement: do not override compute units
+        if settings.useLegacyDecodePath || !settings.enableHardwareAcceleration {
+            return nil
+        }
+        // Prefer all available accelerators (GPU + Neural Engine) on Apple Silicon; safe CPU fallback elsewhere.
+        return ModelComputeOptions(
+            melCompute: .all,
+            audioEncoderCompute: .all,
+            textDecoderCompute: .all,
+            prefillCompute: .all
+        )
+    }
     // Determine recommended concurrent workers with optional override (cap at 4)
     static func recommendedConcurrentWorkers(override: Int?) -> Int {
         let cores = ProcessInfo.processInfo.activeProcessorCount
-        let cap = 4
+        #if arch(arm64)
+        let isAppleSilicon = true
+        #else
+        let isAppleSilicon = false
+        #endif
+
+        let cap: Int
+        if isAppleSilicon && cores >= 8 {
+            // Apple Silicon with 8+ cores (e.g., M1/M2 Pro/Max): allow up to 8 workers
+            cap = 8
+        } else {
+            // Default cap for other architectures or smaller core-count devices
+            cap = 4
+        }
+
         if let override, override > 0 {
             return max(1, min(override, cap))
         }
