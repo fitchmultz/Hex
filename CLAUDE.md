@@ -1,62 +1,60 @@
-# CLAUDE.md
+---
+kind: agent_rules_canon
+project: hex
+version: 1.0.0
+last_reviewed: 2025-09-24
+stacks:
+  swift: "6.0"
+package_managers: ["swiftpm"]
+philosophy: ["fail-fast","minimalism","kiss","dry","PHILOSOPHY.md"]
+sync_targets: [".cursorrules","AGENTS.md","CLAUDE.md"]
+---
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# Agent Rules Canon
 
-## Project Overview
+Do not edit the AGENTS.md or CLAUDE.md files when the project canon needs revised. Instead, edit `docs/AGENT_RULES_CANON.md` and run `scripts/sync-agent-rules.sh` after changes.
+At the beginning of each session, read @PHILOSOPHY.md for coding guidelines. This philosophy is the foundation of the project and MUST be followed in all code.
+Begin each session by reading PHILOSOPHY.md and checking which tools you have available.
 
-Hex is a macOS menu bar application that provides AI-powered voice-to-text transcription using OpenAI's Whisper models. Users activate transcription via customizable hotkeys, and the transcribed text can be automatically pasted into the active application.
+## Project Structure & Module Organization
 
-## Build & Development Commands
+- Root app code lives in `Hex/`:
+  - `App/` (`HexApp.swift`, `HexAppDelegate.swift`), `Assets.xcassets`, `Info.plist`, `Hex.entitlements`.
+  - `Features/` (TCA features, e.g., `Transcription`, `History`).
+  - `Clients/` (side‑effect wrappers, e.g., `PasteboardClient.swift`, `RecordingClient.swift`).
+  - `Models/`, `Views/`, `Resources/` (audio, changelog, localization), `Preview Content/`.
+- Tests are in `HexTests/` (uses Swift Testing via `import Testing`, `@Test`).
+- Xcode project: `Hex.xcodeproj` (targets: `Hex`, `HexTests`).
 
-```bash
-# Build the app
-xcodebuild -scheme Hex -configuration Release
+## Build, Test, and Development Commands
 
-# Run tests
-xcodebuild test -scheme Hex
+- Open in Xcode: `open Hex.xcodeproj`.
+- Debug build: `xcodebuild -project Hex.xcodeproj -scheme Hex -configuration Debug build`.
+- Run tests (macOS): `xcodebuild test -project Hex.xcodeproj -scheme Hex -destination "platform=macOS"`.
+- Lint: `swiftlint` (config at `.swiftlint.yml`).
+- Release (installs to `/Applications`): `bash ./build_release.sh`.
 
-# Open in Xcode (recommended for development)
-open Hex.xcodeproj
-```
+## Coding Style & Naming Conventions
 
-## Architecture
+- Swift, 2‑space indentation; types `UpperCamelCase`, methods/properties `lowerCamelCase`.
+- TCA pattern: prefer `@Reducer` with nested `State` and `Action`; keep side effects in `Clients/` and inject via `Dependencies`.
+- File names match primary type (e.g., `HistoryFeature.swift`, `PasteboardClient.swift`, `InvisibleWindow.swift`).
+- SwiftLint rules enforced (see `.swiftlint.yml`): practical line length (150 warn/200 err), function/file length caps, cyclomatic complexity checks. Run lint before pushing.
 
-The app uses **The Composable Architecture (TCA)** for state management. Key architectural components:
+## Testing Guidelines
 
-### Features (TCA Reducers)
+- Use Swift Testing (`import Testing`, `@Test`). Add tests in `HexTests/`.
+- Name tests for behavior, e.g., `pressAndHold_stopsRecordingOnHotkeyRelease()`.
+- Prefer deterministic tests; inject time/dependencies with `withDependencies { $0.date.now = ... }`.
+- Run locally with the `xcodebuild test` command above.
 
-- `AppFeature`: Root feature coordinating the app lifecycle
-- `TranscriptionFeature`: Core recording and transcription logic
-- `SettingsFeature`: User preferences and configuration
-- `HistoryFeature`: Transcription history management
+## Commit & Pull Request Guidelines
 
-### Dependency Clients
+- Commits: imperative, scoped, concise. Optional prefix (`feat:`, `fix:`, `chore:`). Examples: `fix: clean up state on cancel`, `refactor: simplify RecordingClient`.
+- Branches: `feature/...`, `fix/...`, or `release/vX.Y.Z`.
+- PRs: clear description, linked issues, screenshots/GIFs for UI changes, test plan (commands run), and note any migrations/entitlement changes.
 
-- `TranscriptionClient`: WhisperKit integration for ML transcription
-- `RecordingClient`: AVAudioRecorder wrapper for audio capture
-- `PasteboardClient`: Clipboard operations
-- `KeyEventMonitorClient`: Global hotkey monitoring via Sauce framework
+## Security & Configuration Tips
 
-### Key Dependencies
-
-- **WhisperKit**: Core ML transcription (tracking main branch)
-- **Sauce**: Keyboard event monitoring
-- **Sparkle**: Auto-updates (feed: <https://hex-updates.s3.amazonaws.com/appcast.xml>)
-- **Swift Composable Architecture**: State management
-- **Inject** Hot Reloading for SwiftUI
-
-## Important Implementation Details
-
-1. **Hotkey Recording Modes**: The app supports both press-and-hold and double-tap recording modes, implemented in `HotKeyProcessor.swift`
-
-2. **Model Management**: Whisper models are downloaded on-demand via `ModelDownloadFeature`. Available models are defined in `Resources/Data/models.json`
-
-3. **Sound Effects**: Audio feedback is provided via `SoundEffect.swift` using files in `Resources/Audio/`
-
-4. **Window Management**: Uses an `InvisibleWindow` for the transcription indicator overlay
-
-5. **Permissions**: Requires audio input and automation entitlements (see `Hex.entitlements`)
-
-## Testing
-
-Tests use Swift Testing framework. The main test file is `HexTests/HexTests.swift`. Run tests via Xcode or the command line.
+- macOS app with microphone and accessibility permissions; avoid committing secrets or signing identities.
+- Entitlements live in `Hex/Hex.entitlements`. Release script performs ad‑hoc signing; adjust if using a real team identity.
