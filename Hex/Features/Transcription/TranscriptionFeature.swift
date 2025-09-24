@@ -355,6 +355,44 @@ private extension TranscriptionFeature {
     }
 }
 
+    /// Post-processes transcription results to fix common model hallucinations and spacing issues.
+    /// - Removes common hallucinated phrases like "Thank you" when they appear at the end
+    /// - Ensures the result ends with a space for better concatenation with future transcriptions
+    private func postProcessTranscriptionResult(_ result: String) -> String {
+        var processed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Common hallucinated phrases to remove when they appear at the end
+        let hallucinatedPhrases = [
+            "Thank you."
+        ]
+
+        // Check if the text ends with any of these phrases (case insensitive)
+        for phrase in hallucinatedPhrases {
+            if processed.lowercased().hasSuffix(phrase) {
+                let range = processed.range(of: phrase, options: [.caseInsensitive, .backwards])
+                if let range = range {
+                    processed = processed[...range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+                    break // Remove only the first (last) occurrence
+                }
+            }
+        }
+
+        // If the result doesn't end with a space or newline, add a space
+        // This prevents text from running together when doing multiple transcriptions
+        if !processed.isEmpty && !processed.hasSuffix(" ") && !processed.hasSuffix("\n") {
+            // Check if it ends with punctuation that should be followed by a space
+            let lastChar = processed.last!
+            if lastChar == "." || lastChar == "!" || lastChar == "?" || lastChar == "," || lastChar == ";" || lastChar == ":" {
+                processed += " "
+            } else {
+                // Add space for other cases
+                processed += " "
+            }
+        }
+
+        return processed
+    }
+
 // MARK: - Transcription Handlers
 
 private extension TranscriptionFeature {
@@ -407,6 +445,9 @@ private extension TranscriptionFeature {
             return .none
         }
 
+        // Post-process the transcription result to fix common issues
+        let processedResult = postProcessTranscriptionResult(result)
+
         // Compute how long we recorded
         let duration = state.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
 
@@ -415,7 +456,7 @@ private extension TranscriptionFeature {
             return .none
         }
         return finalizeRecordingAndStoreTranscript(
-            result: result,
+            result: processedResult,
             duration: duration,
             originalURL: originalURL,
             transcriptionHistory: state.$transcriptionHistory

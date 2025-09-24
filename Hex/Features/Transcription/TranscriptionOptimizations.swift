@@ -44,8 +44,13 @@ enum TranscriptionOptimizations {
     // - Uses ChunkingStrategy.vad when enabled; otherwise .none
     // - Sets language and detectLanguage appropriately
     // - Applies concurrentWorkerCount if enabled; no concurrentChunkCount/vadOptions usage
+    // - Uses lower temperature (0.0) to reduce hallucinations like "Thank you"
     static func buildOptimizedDecodeOptions(language: String?, settings: HexSettings) -> DecodingOptions {
-        var options = DecodingOptions()
+        var options = DecodingOptions(
+            temperature: 0.0, // Lower temperature to reduce hallucinations
+            temperatureIncrementOnFallback: 0.1, // Smaller increments
+            temperatureFallbackCount: 3 // Fewer fallback attempts
+        )
 
         if let lang = language, !lang.isEmpty {
             options.language = lang
@@ -78,7 +83,11 @@ enum TranscriptionOptimizations {
 
     // Backward-compatible overload (Phase 1 default behavior)
     static func buildOptimizedDecodeOptions(language: String?) -> DecodingOptions {
-        var options = DecodingOptions()
+        var options = DecodingOptions(
+            temperature: 0.0, // Lower temperature to reduce hallucinations
+            temperatureIncrementOnFallback: 0.1, // Smaller increments
+            temperatureFallbackCount: 3 // Fewer fallback attempts
+        )
         if let lang = language, !lang.isEmpty {
             options.language = lang
             options.detectLanguage = false
