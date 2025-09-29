@@ -363,7 +363,19 @@ private extension TranscriptionFeature {
 
         // Common hallucinated phrases to remove when they appear at the end
         let hallucinatedPhrases = [
-            "Thank you."
+            "Thank you for watching",
+            "Thanks for watching",
+            "Thank you for listening",
+            "Thanks for listening",
+            "Thank you so much",
+            "Thank you.",
+            "Thank you",
+            "Thanks.",
+            "Thanks",
+            "Goodbye",
+            "Bye",
+            "See you next time",
+            "See you later"
         ]
 
         // Check if the text ends with any of these phrases (case insensitive)
