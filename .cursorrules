@@ -13,8 +13,7 @@ sync_targets: [".cursorrules","AGENTS.md","CLAUDE.md"]
 # Agent Rules Canon
 
 Do not edit the AGENTS.md or CLAUDE.md files when the project canon needs revised. Instead, edit `docs/AGENT_RULES_CANON.md` and run `scripts/sync-agent-rules.sh` after changes.
-At the beginning of each session, read @PHILOSOPHY.md for coding guidelines. This philosophy is the foundation of the project and MUST be followed in all code.
-Begin each session by reading PHILOSOPHY.md and checking which tools you have available.
+Begin each session by checking which tools you have available.
 
 ## Project Structure & Module Organization
 
