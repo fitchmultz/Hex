@@ -38,5 +38,13 @@
         "accuracyStars": 4,
         "speedStars": 5,
         "storageSize": "~700MB"
+    },
+    {
+        "displayName": "Canary Qwen 2.5B (NeMo)",
+        "internalName": "canary-qwen-2.5b-nemo",
+        "size": "XL",
+        "accuracyStars": 5,
+        "speedStars": 1,
+        "storageSize": "~5GB"
     }
 ]

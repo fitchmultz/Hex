@@ -43,6 +43,8 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				Resources,
+				"Resources/Canary",
 			);
 			target = 47E05DED2D444EC600D26DA6 /* Hex */;
 		};
@@ -147,14 +149,15 @@
 			productReference = 478637A52D48725900319BFA /* HexTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		47E05DED2D444EC600D26DA6 /* Hex */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 47E05DFD2D444EC700D26DA6 /* Build configuration list for PBXNativeTarget "Hex" */;
-			buildPhases = (
-				47E05DEA2D444EC600D26DA6 /* Sources */,
-				47E05DEB2D444EC600D26DA6 /* Frameworks */,
-				47E05DEC2D444EC600D26DA6 /* Resources */,
-			);
+	47E05DED2D444EC600D26DA6 /* Hex */ = {
+		isa = PBXNativeTarget;
+		buildConfigurationList = 47E05DFD2D444EC700D26DA6 /* Build configuration list for PBXNativeTarget "Hex" */;
+		buildPhases = (
+			47E05DEA2D444EC600D26DA6 /* Sources */,
+			47E05DEB2D444EC600D26DA6 /* Frameworks */,
+			57B5A1B12F0C2B7E00A6E20F /* Package Canary Runtime */,
+			47E05DEC2D444EC600D26DA6 /* Resources */,
+		);
 			buildRules = (
 			);
 			dependencies = (
@@ -246,6 +249,32 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+	57B5A1B12F0C2B7E00A6E20F /* Package Canary Runtime */ = {
+		isa = PBXShellScriptBuildPhase;
+		buildActionMask = 2147483647;
+		files = (
+		);
+		inputFileListPaths = (
+		);
+		inputPaths = (
+			"$(SRCROOT)/runtime/canary/hex_canary_worker.py",
+			"$(SRCROOT)/runtime/canary/python-env-freeze.txt",
+		);
+		name = "Package Canary Runtime";
+		outputFileListPaths = (
+		);
+		outputPaths = (
+			"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Canary/hex_canary_worker.py",
+			"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Canary/python-env-freeze.txt",
+			"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Canary/python-env.bin",
+		);
+		runOnlyForDeploymentPostprocessing = 0;
+		shellPath = /bin/zsh;
+		shellScript = "set -euo pipefail\nARCHIVE=\\\"$SRCROOT/build/canary-env/python-env.bin\\\"\nif [[ ! -f \\\"$ARCHIVE\\\" ]]; then\n  \\\"$SRCROOT/scripts/package_canary_env.sh\\\"\nfi\nDEST=\\\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Canary\\\"\nmkdir -p \\\"$DEST\\\"\ncp \\\"$ARCHIVE\\\" \\\"$DEST/python-env.bin\\\"\ncp \\\"$SRCROOT/runtime/canary/hex_canary_worker.py\\\" \\\"$DEST/hex_canary_worker.py\\\"\ncp \\\"$SRCROOT/runtime/canary/python-env-freeze.txt\\\" \\\"$DEST/python-env-freeze.txt\\\"\n";
+	};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		478637A12D48725900319BFA /* Sources */ = {

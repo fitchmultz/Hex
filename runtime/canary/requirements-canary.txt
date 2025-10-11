@@ -1,0 +1,15 @@
+# Canary runtime dependencies for Apple Silicon (PyTorch + NeMo)
+# Installed via uv by scripts/package_canary_env.sh
+
+# Core runtime
+torch==2.5.0
+torchvision==0.20.0
+torchaudio==2.5.0
+
+# Audio utilities
+soundfile==0.12.1
+librosa==0.10.2.post1
+numpy==1.26.4
+scipy==1.11.4
+
+# NeMo runtime dependencies are installed separately via --no-deps in package_canary_env.sh

@@ -1,8 +1,34 @@
 #!/bin/bash
 set -e
 
+# Ensure the embedded Canary runtime archive exists before building.
+if [[ ! -f "build/canary-env/python-env.bin" ]]; then
+  echo "[build_release] Canary runtime archive missing – building"
+  ./scripts/package_canary_env.sh
+fi
+
 # Build Release
 xcodebuild -project Hex.xcodeproj -scheme Hex -configuration Release -derivedDataPath build clean build | cat
+
+# Replicate the Resources folder manually since it's excluded from the Xcode copy phase.
+APP_RESOURCES_DIR="build/Build/Products/Release/Hex.app/Contents/Resources"
+rsync -a --delete "Hex/Resources/" "$APP_RESOURCES_DIR/"
+
+# Stage Canary runtime archive into the built app bundle.
+CANARY_ARCHIVE="build/canary-env/python-env.bin"
+CANARY_FREEZE="runtime/canary/python-env-freeze.txt"
+CANARY_WORKER="runtime/canary/hex_canary_worker.py"
+APP_CANARY_DIR="build/Build/Products/Release/Hex.app/Contents/Resources/Canary"
+
+if [[ ! -f "$CANARY_ARCHIVE" ]]; then
+  echo "[build_release] Canary archive not found at $CANARY_ARCHIVE" >&2
+  exit 1
+fi
+
+mkdir -p "$APP_CANARY_DIR"
+cp "$CANARY_ARCHIVE" "$APP_CANARY_DIR/python-env.bin"
+cp "$CANARY_FREEZE" "$APP_CANARY_DIR/python-env-freeze.txt"
+cp "$CANARY_WORKER" "$APP_CANARY_DIR/hex_canary_worker.py"
 
 # Replace the app
 osascript -e 'tell application "Hex" to quit' || true

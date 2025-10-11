@@ -469,6 +469,13 @@ private struct CuratedRow: View {
                             .padding(.vertical, 2)
                             .background(Capsule().fill(Color.blue.opacity(0.15)))
                             .foregroundStyle(.blue)
+                    } else if model.internalName.lowercased().hasPrefix("canary-") {
+                        Text("MPS ONLY")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.orange.opacity(0.15)))
+                            .foregroundStyle(.orange)
                     }
                     // Consistent selection indicator
                     if isSelected {
@@ -517,6 +524,7 @@ private struct FooterView: View {
     var body: some View {
         let selected = store.hexSettings.selectedModel
         let isParakeet = selected.lowercased().hasPrefix("parakeet-")
+        let isCanary = selected.lowercased().hasPrefix("canary-")
 
         if store.isDownloading, store.downloadingModelName == selected {
             VStack(alignment: .leading) {
@@ -542,6 +550,10 @@ private struct FooterView: View {
                 }
                 if isParakeet {
                     Text("Parakeet downloads on first use (no manual step)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if isCanary {
+                    Text("Requires Apple Silicon GPU (MPS) and ~5GB download")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if store.selectedModelIsDownloaded {

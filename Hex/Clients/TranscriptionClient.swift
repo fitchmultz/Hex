@@ -11,6 +11,7 @@ import DependenciesMacros
 import Foundation
 import WhisperKit
 import CoreML
+import Metal
 #if canImport(FluidAudio)
 import FluidAudio
 #endif
@@ -83,6 +84,10 @@ actor TranscriptionClientLive {
     private var modelPresenceCacheTime: Date = .distantPast
     private let modelPresenceCacheTTL: TimeInterval = 30 // seconds
 
+    /// Canary runtime (lazily initialized on first use).
+    private var canaryRuntime: CanaryRuntime?
+    private var activeCanaryVariant: String?
+
     /// The base folder under which we store model data (e.g., ~/Library/Application Support/...).
     private lazy var modelsBaseFolder: URL = {
         do {
@@ -100,6 +105,24 @@ actor TranscriptionClientLive {
             return baseURL
         } catch {
             fatalError("Could not create Application Support folder: \(error)")
+        }
+    }()
+
+    /// Base folder for runtime artifacts (Python environments, etc.).
+    private lazy var runtimeBaseFolder: URL = {
+        do {
+            let appSupportURL = try FileManager.default.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            let ourAppFolder = appSupportURL.appendingPathComponent("com.kitlangton.Hex", isDirectory: true)
+            let runtimeURL = ourAppFolder.appendingPathComponent("runtime", isDirectory: true)
+            try FileManager.default.createDirectory(at: runtimeURL, withIntermediateDirectories: true)
+            return runtimeURL
+        } catch {
+            fatalError("Could not create runtime folder: \(error)")
         }
     }()
 
@@ -126,6 +149,13 @@ actor TranscriptionClientLive {
         progressCallback(overallProgress)
 
         print("[TranscriptionClientLive] Processing model: \(variant)")
+
+        if isCanary(variant) {
+            try await prepareCanaryModel(variant: variant, progressCallback: progressCallback)
+            overallProgress.completedUnitCount = 100
+            progressCallback(overallProgress)
+            return
+        }
 
         if isParakeet(variant) {
             // Parakeet path (uses FluidAudio when available). We treat download+load as a single phase.
@@ -177,6 +207,17 @@ actor TranscriptionClientLive {
     func deleteModel(variant: String) async throws {
         let modelFolder = modelPath(for: variant)
 
+        if isCanary(variant) {
+            let fileURL = canaryModelFileURL(for: variant)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                if currentModelName == variant { unloadCurrentModel() }
+                try FileManager.default.removeItem(at: fileURL)
+                try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+                print("[TranscriptionClientLive] Deleted Canary checkpoint: \(variant)")
+            }
+            return
+        }
+
         // Check if the model exists
         guard FileManager.default.fileExists(atPath: modelFolder.path) else {
             // Model doesn't exist, nothing to delete
@@ -205,6 +246,13 @@ actor TranscriptionClientLive {
         }
         if let cached = modelPresenceCache[modelName] {
             return cached
+        }
+
+        if isCanary(modelName) {
+            let fileURL = canaryModelFileURL(for: modelName)
+            let present = FileManager.default.fileExists(atPath: fileURL.path)
+            modelPresenceCache[modelName] = present
+            return present
         }
 
         // Parakeet models may be managed by a different runtime; check for local presence first,
@@ -276,6 +324,7 @@ actor TranscriptionClientLive {
         var names = try await WhisperKit.fetchAvailableModels()
         // Also advertise Parakeet Core ML variants supported by our runtime.
         names.append(contentsOf: parakeetVariants)
+        names.append(contentsOf: canaryVariants)
         return names
     }
 
@@ -288,6 +337,22 @@ actor TranscriptionClientLive {
         options: DecodingOptions,
         progressCallback: @escaping (Progress) -> Void
     ) async throws -> String {
+        if isCanary(model) {
+            if currentModelName != model {
+                unloadCurrentModel()
+                try await downloadAndLoadModel(variant: model) { progress in
+                    progressCallback(progress)
+                }
+            }
+
+            let runtime = try await canaryRuntimeInstance(for: model)
+            let wavURL = try exportAudioForCanary(url: url)
+            defer { try? FileManager.default.removeItem(at: wavURL) }
+            let text = try await runtime.transcribe(wavURL)
+            currentModelName = model
+            return text
+        }
+
         if isParakeet(model) {
             #if canImport(FluidAudio)
             // Reuse existing Parakeet engine if the same variant is already loaded.
@@ -349,7 +414,12 @@ actor TranscriptionClientLive {
         let sanitizedVariant = sanitizeVariantName(variant)
 
         let base = modelsBaseFolder.resolvingSymlinksInPath()
-        if isParakeet(variant) {
+        if isCanary(variant) {
+            return base
+                .appendingPathComponent("nvidia", isDirectory: true)
+                .appendingPathComponent("canary", isDirectory: true)
+                .appendingPathComponent(sanitizedVariant, isDirectory: true)
+        } else if isParakeet(variant) {
             return base
                 .appendingPathComponent("parakeet", isDirectory: true)
                 .appendingPathComponent(sanitizedVariant, isDirectory: true)
@@ -364,6 +434,204 @@ actor TranscriptionClientLive {
     /// Creates or returns the local folder for the tokenizer files of a given `variant`.
     private func tokenizerPath(for variant: String) -> URL {
         modelPath(for: variant).appendingPathComponent("tokenizer", isDirectory: true)
+    }
+
+    private func canaryModelFileURL(for variant: String) -> URL {
+        let sanitizedVariant = sanitizeVariantName(variant)
+        return modelPath(for: variant).appendingPathComponent("\(sanitizedVariant).nemo", isDirectory: false)
+    }
+
+    private func prepareCanaryModel(variant: String, progressCallback: @escaping (Progress) -> Void) async throws {
+        let progress = Progress(totalUnitCount: 100)
+        progress.completedUnitCount = 0
+        progressCallback(progress)
+
+        try ensureMetalDeviceAvailable()
+        progress.completedUnitCount = 10
+        progressCallback(progress)
+
+        try ensureCanaryEnvironment(for: variant)
+        progress.completedUnitCount = 20
+        progressCallback(progress)
+
+        try await downloadCanaryModelIfNeeded(variant: variant, progress: progress, progressCallback: progressCallback)
+
+        let runtime = try await canaryRuntimeInstance(for: variant)
+        progress.completedUnitCount = 90
+        progressCallback(progress)
+        try await runtime.warmUp()
+        currentModelName = variant
+        activeCanaryVariant = variant
+        progress.completedUnitCount = 100
+        progressCallback(progress)
+    }
+
+    private func ensureMetalDeviceAvailable() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw NSError(
+                domain: "TranscriptionClient",
+                code: -20,
+                userInfo: [NSLocalizedDescriptionKey: "No Metal device available for MPS backend"]
+            )
+        }
+    }
+
+    private func ensureCanaryEnvironment(for variant: String) throws {
+        try ensureCanaryEnvironmentInstalled()
+        _ = try canaryRuntimeConfiguration(for: variant)
+    }
+
+    private func downloadCanaryModelIfNeeded(
+        variant: String,
+        progress: Progress,
+        progressCallback: @escaping (Progress) -> Void
+    ) async throws {
+        let fileURL = canaryModelFileURL(for: variant)
+        let fm = FileManager.default
+        let parent = fileURL.deletingLastPathComponent()
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true, attributes: nil)
+
+        if fm.fileExists(atPath: fileURL.path) {
+            progress.completedUnitCount = 80
+            progressCallback(progress)
+            return
+        }
+
+        let downloadURL = URL(string: "https://huggingface.co/nvidia/canary-qwen-2.5b/resolve/main/canary-qwen-2.5b.nemo?download=true")!
+        var request = URLRequest(url: downloadURL)
+        request.setValue("Hex/CanaryRuntime", forHTTPHeaderField: "User-Agent")
+
+        progress.completedUnitCount = 30
+        progressCallback(progress)
+
+        let (downloadedURL, response) = try await URLSession.shared.download(for: request)
+        let expectedLength = response.expectedContentLength
+        if expectedLength > 0 {
+            progress.completedUnitCount = 70
+            progressCallback(progress)
+        }
+
+        let tempURL = parent.appendingPathComponent(UUID().uuidString)
+        if fm.fileExists(atPath: tempURL.path) {
+            try fm.removeItem(at: tempURL)
+        }
+        try fm.moveItem(at: downloadedURL, to: tempURL)
+
+        if fm.fileExists(atPath: fileURL.path) {
+            try fm.removeItem(at: fileURL)
+        }
+        try fm.moveItem(at: tempURL, to: fileURL)
+        progress.completedUnitCount = 80
+        progressCallback(progress)
+    }
+
+    private func canaryRuntimeConfiguration(for variant: String) throws -> CanaryRuntime.Configuration {
+        let envRoot = canaryEnvironmentRoot()
+        let python = envRoot
+            .appendingPathComponent("bin")
+            .appendingPathComponent("python3")
+
+        guard FileManager.default.fileExists(atPath: python.path) else {
+            throw NSError(domain: "TranscriptionClient", code: -24, userInfo: [NSLocalizedDescriptionKey: "Extracted Python runtime missing"])
+        }
+
+        guard let worker = Bundle.main.resourceURL?
+            .appendingPathComponent("Canary")
+            .appendingPathComponent("hex_canary_worker.py")
+        else {
+            throw NSError(domain: "TranscriptionClient", code: -25, userInfo: [NSLocalizedDescriptionKey: "Canary worker script missing from bundle"])
+        }
+
+        let model = canaryModelFileURL(for: variant)
+
+        return CanaryRuntime.Configuration(
+            pythonExecutable: python,
+            workerScript: worker,
+            modelCheckpoint: model
+        )
+    }
+
+    private func canaryRuntimeInstance(for variant: String) async throws -> CanaryRuntime {
+        if let runtime = canaryRuntime, activeCanaryVariant == variant {
+            return runtime
+        }
+
+        if let runtime = canaryRuntime, activeCanaryVariant != variant {
+            await runtime.shutdown()
+            canaryRuntime = nil
+        }
+
+        let config = try canaryRuntimeConfiguration(for: variant)
+        let runtime = CanaryRuntime(configuration: config)
+        canaryRuntime = runtime
+        activeCanaryVariant = variant
+        return runtime
+    }
+
+    private func canaryEnvironmentRoot() -> URL {
+        runtimeBaseFolder
+            .appendingPathComponent("canary", isDirectory: true)
+            .appendingPathComponent("python-env", isDirectory: true)
+    }
+
+    private func ensureCanaryEnvironmentInstalled() throws {
+        let fm = FileManager.default
+        let envRoot = canaryEnvironmentRoot()
+        let pythonBinary = envRoot.appendingPathComponent("bin/python3")
+
+        guard
+            let archiveURL = (
+                Bundle.main.url(forResource: "python-env", withExtension: "bin", subdirectory: "Canary") ??
+                Bundle.main.url(forResource: "python-env", withExtension: "tar.gz.bin", subdirectory: "Canary") ??
+                Bundle.main.url(forResource: "python-env", withExtension: "tar.gz", subdirectory: "Canary")
+            ),
+            let freezeURL = Bundle.main.url(forResource: "python-env-freeze", withExtension: "txt", subdirectory: "Canary")
+        else {
+            throw NSError(domain: "TranscriptionClient", code: -23, userInfo: [NSLocalizedDescriptionKey: "Canary runtime archive missing from bundle"])
+        }
+
+        let destinationFreeze = envRoot.appendingPathComponent("canary-freeze.txt")
+
+        if fm.fileExists(atPath: pythonBinary.path),
+           let bundledFreeze = try? Data(contentsOf: freezeURL),
+           let installedFreeze = try? Data(contentsOf: destinationFreeze),
+           bundledFreeze == installedFreeze {
+            return
+        }
+
+        if fm.fileExists(atPath: envRoot.path) {
+            try fm.removeItem(at: envRoot)
+        }
+        try fm.createDirectory(at: envRoot, withIntermediateDirectories: true, attributes: nil)
+
+        try extractCanaryEnvironmentArchive(archiveURL, to: envRoot)
+
+        if fm.fileExists(atPath: destinationFreeze.path) {
+            try fm.removeItem(at: destinationFreeze)
+        }
+        try fm.copyItem(at: freezeURL, to: destinationFreeze)
+    }
+
+    private func extractCanaryEnvironmentArchive(_ archive: URL, to destination: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["tar", "-xzf", archive.path, "-C", destination.path]
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+        process.standardOutput = nil
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: errorData, encoding: .utf8) ?? "Unknown extraction error"
+            throw NSError(
+                domain: "TranscriptionClient",
+                code: -26,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to extract Canary runtime: \(message.trimmingCharacters(in: .whitespacesAndNewlines))"]
+            )
+        }
     }
 
     // Unloads any currently loaded model (clears `whisperKit` and `currentModelName`).
@@ -545,6 +813,14 @@ actor TranscriptionClientLive {
 // MARK: - Parakeet helpers
 
 private extension TranscriptionClientLive {
+    func isCanary(_ name: String) -> Bool {
+        name.lowercased().hasPrefix("canary-")
+    }
+
+    var canaryVariants: [String] {
+        ["canary-qwen-2.5b-nemo"]
+    }
+
     func isParakeet(_ name: String) -> Bool {
         name.lowercased().hasPrefix("parakeet-")
     }
@@ -675,6 +951,58 @@ private extension TranscriptionClientLive {
         }
 
         return output
+    }
+
+    func exportAudioForCanary(url: URL) throws -> URL {
+        let samples = try loadAudioAs16kMonoFloats(url: url)
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        try writeWav(samples: samples, sampleRate: 16_000, to: tempURL)
+        return tempURL
+    }
+
+    func writeWav(samples: [Float], sampleRate: Int, to url: URL) throws {
+        let numChannels = 1
+        let bitsPerSample = 16
+        let byteRate = sampleRate * numChannels * bitsPerSample / 8
+        let blockAlign = numChannels * bitsPerSample / 8
+
+        var header = Data()
+        header.append(contentsOf: "RIFF".utf8)
+        var chunkSize = UInt32(36 + samples.count * 2).littleEndian
+        withUnsafeBytes(of: &chunkSize) { header.append(contentsOf: $0) }
+        header.append(contentsOf: "WAVE".utf8)
+        header.append(contentsOf: "fmt ".utf8)
+        var subChunk1Size: UInt32 = 16
+        withUnsafeBytes(of: &subChunk1Size) { header.append(contentsOf: $0) }
+        var audioFormat: UInt16 = 1
+        withUnsafeBytes(of: &audioFormat) { header.append(contentsOf: $0) }
+        var numChannelsLE = UInt16(numChannels)
+        withUnsafeBytes(of: &numChannelsLE) { header.append(contentsOf: $0) }
+        var sampleRateLE = UInt32(sampleRate)
+        withUnsafeBytes(of: &sampleRateLE) { header.append(contentsOf: $0) }
+        var byteRateLE = UInt32(byteRate)
+        withUnsafeBytes(of: &byteRateLE) { header.append(contentsOf: $0) }
+        var blockAlignLE = UInt16(blockAlign)
+        withUnsafeBytes(of: &blockAlignLE) { header.append(contentsOf: $0) }
+        var bitsPerSampleLE = UInt16(bitsPerSample)
+        withUnsafeBytes(of: &bitsPerSampleLE) { header.append(contentsOf: $0) }
+        header.append(contentsOf: "data".utf8)
+        var dataSize = UInt32(samples.count * 2)
+        withUnsafeBytes(of: &dataSize) { header.append(contentsOf: $0) }
+
+        var pcmData = Data(capacity: samples.count * 2)
+        for sample in samples {
+            let clipped = max(-1.0, min(1.0, Double(sample)))
+            var intSample = Int16(clipped * Double(Int16.max)).littleEndian
+            withUnsafeBytes(of: &intSample) { pcmData.append(contentsOf: $0) }
+        }
+
+        var fileData = Data()
+        fileData.append(header)
+        fileData.append(pcmData)
+        try fileData.write(to: url, options: .atomic)
     }
 
 }
