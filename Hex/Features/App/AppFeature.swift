@@ -11,120 +11,154 @@ import SwiftUI
 
 @Reducer
 struct AppFeature {
-    enum ActiveTab: Equatable {
-        case settings
-        case history
-        case about
+  enum ActiveTab: Equatable {
+    case settings
+    case history
+    case about
+  }
+
+  @ObservableState
+  struct State {
+    var transcription: TranscriptionFeature.State = .init()
+    var settings: SettingsFeature.State = .init()
+    var history: HistoryFeature.State = .init()
+    var activeTab: ActiveTab = .settings
+  }
+
+  enum Action: BindableAction {
+    case binding(BindingAction<State>)
+    case transcription(TranscriptionFeature.Action)
+    case settings(SettingsFeature.Action)
+    case history(HistoryFeature.Action)
+    case setActiveTab(ActiveTab)
+    case task
+    case pasteLastTranscript
+  }
+
+  @Dependency(\.keyEventMonitor) var keyEventMonitor
+  @Dependency(\.pasteboard) var pasteboard
+
+  var body: some ReducerOf<Self> {
+    BindingReducer()
+
+    Scope(state: \.transcription, action: \.transcription) {
+      TranscriptionFeature()
     }
 
-    @ObservableState
-    struct State {
-        var transcription: TranscriptionFeature.State = .init()
-        var settings: SettingsFeature.State = .init()
-        var history: HistoryFeature.State = .init()
-        var activeTab: ActiveTab = .settings
+    Scope(state: \.settings, action: \.settings) {
+      SettingsFeature()
     }
 
-    enum Action: BindableAction {
-        case binding(BindingAction<State>)
-        case transcription(TranscriptionFeature.Action)
-        case settings(SettingsFeature.Action)
-        case history(HistoryFeature.Action)
-        case setActiveTab(ActiveTab)
-        case task
+    Scope(state: \.history, action: \.history) {
+      HistoryFeature()
     }
 
-    var body: some ReducerOf<Self> {
-        BindingReducer()
-
-        Scope(state: \.transcription, action: \.transcription) {
-            TranscriptionFeature()
+    Reduce { state, action in
+      switch action {
+      case .binding:
+        return .none
+        
+      case .task:
+        return startPasteLastTranscriptMonitoring()
+        
+      case .pasteLastTranscript:
+        @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
+        guard let lastTranscript = transcriptionHistory.history.first?.text else {
+          return .none
         }
-
-        Scope(state: \.settings, action: \.settings) {
-            SettingsFeature()
+        return .run { _ in
+          await pasteboard.paste(lastTranscript)
         }
-
-        Scope(state: \.history, action: \.history) {
-            HistoryFeature()
-        }
-
-        Reduce { state, action in
-            switch action {
-            case .task:
-                return .run { _ in
-                    @Dependency(\.soundEffects) var soundEffects
-                    await soundEffects.preloadSounds()
-                }
-            case .binding:
-                return .none
-            case .transcription:
-                return .none
-            case .settings(.modelDownload(.selectModel)):
-                // Cancel any ongoing prewarm when the selected model changes and start prewarming the new selection
-                return .merge(
-                    .send(.transcription(.cancelPrewarm)),
-                    .send(.transcription(.prewarmSelectedModel))
-                )
-            case .settings:
-                return .none
-            case .history(.navigateToSettings):
-                state.activeTab = .settings
-                return .none
-            case .history:
-                return .none
-            case let .setActiveTab(tab):
-                state.activeTab = tab
-                return .none
-            }
-        }
+        
+      case .transcription:
+        return .none
+      case .settings:
+        return .none
+      case .history(.navigateToSettings):
+        state.activeTab = .settings
+        return .none
+      case .history:
+        return .none
+      case let .setActiveTab(tab):
+        state.activeTab = tab
+        return .none
+      }
     }
+  }
+  
+  private func startPasteLastTranscriptMonitoring() -> Effect<Action> {
+    .run { send in
+      @Shared(.isSettingPasteLastTranscriptHotkey) var isSettingPasteLastTranscriptHotkey: Bool
+      @Shared(.hexSettings) var hexSettings: HexSettings
+
+      keyEventMonitor.handleKeyEvent { keyEvent in
+        // Skip if user is setting a hotkey
+        if isSettingPasteLastTranscriptHotkey {
+          return false
+        }
+
+        // Check if this matches the paste last transcript hotkey
+        guard let pasteHotkey = hexSettings.pasteLastTranscriptHotkey,
+              let key = keyEvent.key,
+              key == pasteHotkey.key,
+              keyEvent.modifiers == pasteHotkey.modifiers else {
+          return false
+        }
+
+        // Trigger paste action - use MainActor to avoid escaping send
+        MainActor.assumeIsolated {
+          send(.pasteLastTranscript)
+        }
+        return true // Intercept the key event
+      }
+    }
+  }
 }
 
 struct AppView: View {
-    @Bindable var store: StoreOf<AppFeature>
-    @State private var columnVisibility = NavigationSplitViewVisibility.automatic
+  @Bindable var store: StoreOf<AppFeature>
+  @State private var columnVisibility = NavigationSplitViewVisibility.automatic
 
-    var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(selection: $store.activeTab) {
-                Button {
-                    store.send(.setActiveTab(.settings))
-                } label: {
-                    Label("Settings", systemImage: "gearshape")
-                }.buttonStyle(.plain)
-                .tag(AppFeature.ActiveTab.settings)
+  var body: some View {
+    NavigationSplitView(columnVisibility: $columnVisibility) {
+      List(selection: $store.activeTab) {
+        Button {
+          store.send(.setActiveTab(.settings))
+        } label: {
+          Label("Settings", systemImage: "gearshape")
+        }.buttonStyle(.plain)
+          .tag(AppFeature.ActiveTab.settings)
 
-                Button {
-                    store.send(.setActiveTab(.history))
-                } label: {
-                    Label("History", systemImage: "clock")
-                }.buttonStyle(.plain)
-                .tag(AppFeature.ActiveTab.history)
-
-                Button {
-                    store.send(.setActiveTab(.about))
-                } label: {
-                    Label("About", systemImage: "info.circle")
-                }.buttonStyle(.plain)
-                .tag(AppFeature.ActiveTab.about)
-            }
-        } detail: {
-            switch store.state.activeTab {
-            case .settings:
-                SettingsView(store: store.scope(state: \.settings, action: \.settings))
-                    .navigationTitle("Settings")
-            case .history:
-                HistoryView(store: store.scope(state: \.history, action: \.history))
-                    .navigationTitle("History")
-            case .about:
-                AboutView(store: store.scope(state: \.settings, action: \.settings))
-                    .navigationTitle("About")
-            }
-        }
-        .task {
-            await store.send(.task).finish()
-        }
-        .enableInjection()
+        Button {
+          store.send(.setActiveTab(.history))
+        } label: {
+          Label("History", systemImage: "clock")
+        }.buttonStyle(.plain)
+          .tag(AppFeature.ActiveTab.history)
+          
+        Button {
+          store.send(.setActiveTab(.about))
+        } label: {
+          Label("About", systemImage: "info.circle")
+        }.buttonStyle(.plain)
+          .tag(AppFeature.ActiveTab.about)
+      }
+    } detail: {
+      switch store.state.activeTab {
+      case .settings:
+        SettingsView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle("Settings")
+      case .history:
+        HistoryView(store: store.scope(state: \.history, action: \.history))
+          .navigationTitle("History")
+      case .about:
+        AboutView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle("About")
+      }
     }
+    .task {
+      await store.send(.task).finish()
+    }
+    .enableInjection()
+  }
 }

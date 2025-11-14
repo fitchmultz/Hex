@@ -4,6 +4,9 @@
     "" : {
       "shouldTranslate" : false
     },
+    "(%@)" : {
+
+    },
     "•" : {
       "shouldTranslate" : false
     },
@@ -72,6 +75,9 @@
         }
       }
     },
+    "Cancel Download" : {
+
+    },
     "Changelog" : {
       "localizations" : {
         "de" : {
@@ -113,6 +119,9 @@
           }
         }
       }
+    },
+    "Clear Hotkey" : {
+
     },
     "Close" : {
       "localizations" : {
@@ -223,6 +232,9 @@
         }
       }
     },
+    "Downloaded" : {
+
+    },
     "Downloading %@..." : {
       "comment" : "In Transcription Model section in settings.",
       "extractionState" : "stale",
@@ -238,7 +250,13 @@
     "Downloading model..." : {
 
     },
+    "Downloading… %lld%%" : {
+
+    },
     "Enable in Settings" : {
+
+    },
+    "English only" : {
 
     },
     "Ensure Hex can access your microphone and system accessibility features." : {
@@ -310,9 +328,6 @@
     "History Disabled" : {
 
     },
-    "History Storage" : {
-
-    },
     "Hot Key" : {
       "comment" : "hotkey section in settings.",
       "localizations" : {
@@ -354,15 +369,14 @@
     "Microphone Selection" : {
 
     },
-    "Model" : {
+    "Model prewarming..." : {
 
     },
-    "Model prewarming..." : {
+    "Multilingual" : {
 
     },
     "No models found." : {
       "comment" : "Replacement text in transcription model section when no available models are found",
-      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -383,13 +397,7 @@
         }
       }
     },
-    "Off" : {
-
-    },
     "Oldest entries will be automatically deleted when limit is reached" : {
-
-    },
-    "Only transcript text and metadata are saved. Audio recordings are discarded after transcription." : {
 
     },
     "Open on Login" : {
@@ -417,16 +425,16 @@
     "Override the system default microphone with a specific input device. This setting will persist across sessions." : {
 
     },
-    "Parakeet downloads on first use (no manual step)" : {
+    "Paste Last Transcript" : {
 
     },
-    "Mute while recording" : {
-      "comment" : "Label for general setting whether to mute system output while recording.",
+    "Pause Media while Recording" : {
+      "comment" : "Label for general setting whether to pause media while recording.",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Während der Aufnahme stummschalten"
+            "value" : "Medien während der Aufnahme pausieren"
           }
         }
       }
@@ -464,8 +472,8 @@
         }
       }
     },
-    "Quit %@" : {
-      "comment" : "Quit application menu item"
+    "Quit" : {
+
     },
     "Recommended for custom hotkeys to avoid interfering with normal usage" : {
 
@@ -484,7 +492,10 @@
         }
       }
     },
-    "RNNT" : {
+    "Save Transcription History" : {
+
+    },
+    "Save transcriptions and audio recordings for later access" : {
 
     },
     "Selected device not connected. System default will be used." : {
@@ -492,6 +503,7 @@
     },
     "Selected Model" : {
       "comment" : "Label for selecting which model is active",
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -502,6 +514,9 @@
       }
     },
     "Selected: %@" : {
+
+    },
+    "Set a keyboard shortcut to paste your last transcription" : {
 
     },
     "Settings" : {
@@ -526,9 +541,6 @@
         }
       }
     },
-    "Show All Models" : {
-
-    },
     "Show Changelog" : {
       "localizations" : {
         "de" : {
@@ -550,19 +562,10 @@
         }
       }
     },
+    "Show in Finder" : {
+
+    },
     "Show Models Folder" : {
-
-    },
-    "Show Recommended" : {
-
-    },
-    "Showing all models" : {
-
-    },
-    "Showing recommended models" : {
-
-    },
-    "Size" : {
 
     },
     "Sound" : {
@@ -607,12 +610,6 @@
     "System Default" : {
 
     },
-    "Text + Audio" : {
-
-    },
-    "Text only" : {
-
-    },
     "Transcription history is currently disabled." : {
 
     },
@@ -627,13 +624,10 @@
         }
       }
     },
-    "Transcriptions are not saved. Audio files are deleted immediately after transcription." : {
-
-    },
-    "Transcripts and audio recordings are saved for later access." : {
-
-    },
     "Unlimited" : {
+
+    },
+    "Use" : {
 
     },
     "Use clipboard to insert" : {
@@ -682,6 +676,9 @@
           }
         }
       }
+    },
+    "When disabled, transcriptions will not be saved and audio files will be deleted immediately after transcription." : {
+
     },
     "You're using a full keyboard shortcut. Double-tap is recommended." : {
 
